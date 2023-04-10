@@ -1,9 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
-set(CMAKE_CXX_STANDARD 17)
 
-project(imgui-starter
-	LANGUAGES C CXX
-)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
+
+project(json-explorer LANGUAGES C CXX)
+
+option(JSON_EXPLORER_BUILD_TESTS "Build tests")
 
 include(FetchContent)
 
@@ -30,7 +34,7 @@ add_library(imgui STATIC
 	${imgui_SOURCE_DIR}/imgui_draw.cpp
 	${imgui_SOURCE_DIR}/imgui_tables.cpp
 	${imgui_SOURCE_DIR}/imgui_widgets.cpp
-	# 
+	#
 	${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.h
 	${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
 	${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer.h
@@ -42,5 +46,22 @@ target_include_directories(imgui
 	PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
 
 add_subdirectory(imgui-window)
-add_executable(imgui-starter imgui-starter.cpp)
-target_link_libraries(imgui-starter imgui-window)
+add_subdirectory(json-parser)
+add_subdirectory(json-explorer)
+
+if (${JSON_EXPLORER_BUILD_TESTS})
+	FetchContent_Declare(doctest
+		GIT_REPOSITORY git@github.com:doctest/doctest.git
+		GIT_TAG v2.4.11)
+
+	FetchContent_Declare(json-test-suite
+		GIT_REPOSITORY git@github.com:nst/JSONTestSuite.git
+		GIT_TAG master)
+	
+	FetchContent_MakeAvailable(doctest json-test-suite)
+
+	list(APPEND CMAKE_MODULE_PATH ${doctest_SOURCE_DIR}/scripts/cmake)
+	include(CTest)
+	enable_testing()
+	add_subdirectory(json-parser-tests)
+endif()
