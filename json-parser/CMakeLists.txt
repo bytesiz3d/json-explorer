@@ -4,6 +4,7 @@ add_library(json-parser SHARED
 	include/json-parser/json-parser.h
 	src/json-parser.cpp)
 target_include_directories(json-parser PUBLIC include)
+target_link_libraries(json-parser PRIVATE utf8proc)
 
 include(GenerateExportHeader)
 generate_export_header(json-parser EXPORT_FILE_NAME ${CMAKE_CURRENT_SOURCE_DIR}/include/json-parser/Exports.h)

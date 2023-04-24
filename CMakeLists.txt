@@ -19,7 +19,12 @@ FetchContent_Declare(SDL2
 	GIT_REPOSITORY git@github.com:libsdl-org/SDL.git
 	GIT_TAG release-2.26.5)
 set(SDL_SHARED OFF)
-FetchContent_MakeAvailable(imgui SDL2)
+
+FetchContent_Declare(utf8proc
+	GIT_REPOSITORY git@github.com:JuliaStrings/utf8proc.git
+	GIT_TAG v2.8.0)
+
+FetchContent_MakeAvailable(imgui SDL2 utf8proc)
 
 add_library(imgui STATIC
 	${imgui_SOURCE_DIR}/imconfig.h
@@ -39,9 +44,7 @@ add_library(imgui STATIC
 	${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
 	${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer.h
 	${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer.cpp)
-
 target_link_libraries(imgui SDL2-static)
-
 target_include_directories(imgui
 	PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
 

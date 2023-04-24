@@ -1,6 +1,6 @@
 #include "json-parser/json-parser.h"
+
 #include <array>
-#include <assert.h>
 #include <format>
 #include <iostream>
 #include <span>
@@ -9,159 +9,95 @@
 #include <unordered_map>
 #include <vector>
 
+#include <assert.h>
+#include <utf8proc.h>
+
 // OPTIMIZE:
 // * Profile standard library RAII containers and search for replacements
 
-struct IToken
+struct Error
 {
-	using Kind = size_t;
+	std::string_view err;
 
-	virtual Kind
-	kind() const = 0;
+	explicit operator bool() { return err.empty() == false; }
 
-	virtual std::string_view
-	data() const = 0;
-
-	virtual bool
-	is_terminal() const = 0;
-
-	virtual bool
-	is_equal(IToken* other) const = 0;
-};
-
-template<>
-struct std::formatter<IToken*> : std::formatter<std::string>
-{
-	auto
-	format(IToken* tkn, format_context& ctx)
+	bool
+	operator==(bool v)
 	{
-		return std::format_to(ctx.out(), "{}", tkn->data());
+		return bool(*this) == v;
+	}
+
+	bool
+	operator!=(bool v)
+	{
+		return bool(*this) != v;
 	}
 };
 
-template<>
-struct std::formatter<std::span<IToken* const>> : std::formatter<std::string>
+template<typename T>
+struct Result
+{
+	T val;
+	Error err;
+
+	Result(Error e) : err(e)
+	{
+	}
+
+
+	template<typename... TArgs>
+	Result(TArgs&&... args) : val(std::forward<TArgs>(args)...), err{}
+	{
+	}
+
+	Result(const Result&) = delete;
+
+	Result(Result&&) = default;
+
+	Result&
+	operator=(const Result&) = delete;
+
+	Result&
+	operator=(Result&&) = default;
+
+	~Result() = default;
+};
+
+
+using Rune = utf8proc_int32_t;
+
+Result<Rune>
+utf8_read(std::string_view str, std::string_view::const_iterator& it)
+{
+	Rune r{};
+	auto ptr = (utf8proc_uint8_t*)(&*it);
+	auto len = str.end() - it;
+
+	auto bytes_read = utf8proc_iterate(ptr, len, &r);
+	if (bytes_read < 0)
+		return Error{utf8proc_errmsg(bytes_read)};
+
+	it += bytes_read;
+	return r;
+}
+
+template<typename T>
+struct std::formatter<std::span<T>> : std::formatter<std::string>
 {
 	auto
 	format(const auto& span, format_context& ctx)
 	{
 		std::format_to(ctx.out(), "[");
-		for (const auto& tkn : span)
+		for (auto tkn : span)
 			std::format_to(ctx.out(), " {}", tkn);
 
 		return std::format_to(ctx.out(), " ]");
 	}
 };
 
-struct Production
+struct JSON_Token
 {
-	IToken* lhs;
-	std::vector<IToken*> rhs;
-	std::string_view error;
-
-	constexpr static Production
-	Error(std::string_view message)
-	{
-		Production error{};
-		error.error = message;
-		return error;
-	}
-
-	bool
-	is_error() const
-	{
-		return error.empty() == false;
-	}
-};
-
-template<>
-struct std::formatter<Production> : std::formatter<std::string>
-{
-	auto
-	format(const Production& production, format_context& ctx)
-	{
-		std::span<IToken* const> span(production.rhs.begin(), production.rhs.end());
-		return std::format_to(ctx.out(), "{} -> {}", production.lhs, span);
-	}
-};
-
-struct PTable
-{
-	std::unordered_map<IToken::Kind, std::unordered_map<IToken::Kind, Production>> table;
-
-	void
-	add(IToken::Kind nonterminal, IToken::Kind terminal, const Production& production)
-	{
-		table[nonterminal][terminal] = production;
-	}
-
-	Production
-	operator()(IToken::Kind nonterminal, IToken::Kind terminal) const
-	{
-		assert(table.contains(nonterminal));
-
-		auto& productions = table.at(nonterminal);
-
-		if (productions.contains(terminal) == false)
-			return Production::Error("Unexpected terminal");
-
-		return productions.at(terminal);
-	}
-
-	Production
-	operator()(IToken* nonterminal, IToken* terminal) const
-	{
-		return this->operator()(nonterminal->kind(), terminal->kind());
-	}
-};
-
-struct LL_Parse_Error
-{
-	std::string_view err;
-	explicit operator bool() { return err.empty() == false; }
-	bool operator==(bool v) { return bool(*this) == v; }
-	bool operator!=(bool v) { return bool(*this) != v; }
-};
-
-template<typename Fn, typename... Args>
-inline static LL_Parse_Error
-ll_parse(std::span<IToken*> tokens, const PTable& parsing_table, Fn&& fn, Args&&... args)
-{
-	std::stack<IToken*> stack{};
-	auto it = tokens.begin();
-
-	while (stack.empty() == false)
-	{
-		IToken* input = *it;
-
-		if (input == stack.top())
-		{
-			stack.pop();
-			it++;
-		}
-		else if (stack.top()->is_terminal())
-		{
-			return {"Unexpected terminal"};
-		}
-		else if (auto production = parsing_table(stack.top(), input); production.is_error())
-		{
-			return {production.error};
-		}
-		else
-		{
-			fn(production, args...);
-			stack.pop();
-			for (auto rhs = production.rhs.rbegin(); rhs != production.rhs.rend(); rhs++)
-				stack.push(*rhs);
-		}
-	}
-	return {};
-}
-
-
-struct JSON_Token : IToken
-{
-	enum KIND : IToken::Kind
+	enum KIND : Rune
 	{
 		META_NIL = 0, // default
 		META_EPS,
@@ -169,6 +105,7 @@ struct JSON_Token : IToken
 		T_null,
 		T_true,
 		T_false,
+
 		T_comma = ',',
 		T_lbracket = '[',
 		T_rbracket = ']',
@@ -182,11 +119,13 @@ struct JSON_Token : IToken
 		T_plus = '+',
 		T_dot = '.',
 		T_colon = ':',
+		T_backslash = '\\',
 
-		T_onenine, // data is relevant
-		T_unicode, // data is relevant
+		T_onenine = 0x100, // data is relevant
+		T_unicode,         // data is relevant
+		T_escaped,         // data is relevant
 
-		N_START = 0x100,
+		N_START = 0x1000,
 		N_END_OF_INPUT,
 
 		N_V,
@@ -213,10 +152,15 @@ struct JSON_Token : IToken
 	// OPTIMIZE: Maybe string_view
 	std::string _data;
 
-	virtual Kind
+	JSON_Token() = default;
+	JSON_Token(KIND kind, std::string_view data = {}) : _kind((KIND)kind), _data(data)
+	{
+	}
+
+	virtual KIND
 	kind() const
 	{
-		return IToken::Kind{_kind};
+		return _kind;
 	}
 
 	virtual std::string_view
@@ -244,9 +188,12 @@ struct JSON_Token : IToken
 		case T_plus: return "+";
 		case T_dot: return ".";
 		case T_colon: return ":";
+		case T_backslash: return "\\";
 
 		case T_unicode:
-		case T_onenine: return _data;
+		case T_onenine:
+		case T_escaped:
+			return _data;
 
 		case N_START: return "<S>";
 		case N_END_OF_INPUT: return "<$>";
@@ -292,29 +239,30 @@ struct JSON_Token : IToken
 		case T_rbrace:
 		case T_quote:
 		case T_zero:
-		case T_onenine:
 		case T_e:
 		case T_E:
 		case T_minus:
 		case T_plus:
 		case T_dot:
 		case T_colon:
-		case T_unicode:
-			return true;
+		case T_backslash:
 
-		default: return false;
+		case T_onenine:
+		case T_unicode:
+		case T_escaped:
+			return true;
 		}
+
+		return false;
 	}
 
 	virtual bool
-	is_equal(IToken* other) const
+	is_equal(const JSON_Token& other) const
 	{
-		JSON_Token* j = (JSON_Token*)other;
-
-		if (is_terminal() != j->is_terminal())
+		if (is_terminal() != other.is_terminal())
 			return false;
 
-		if (kind() != j->kind())
+		if (kind() != other.kind())
 			return false;
 
 		if (is_terminal() == false)
@@ -324,12 +272,105 @@ struct JSON_Token : IToken
 		{
 		case T_onenine:
 		case T_unicode:
-			return data() == j->data();
+		case T_escaped:
+			return data() == other.data();
 
 		default: return true;
 		}
 	}
 };
+
+template<>
+struct std::formatter<JSON_Token> : std::formatter<std::string>
+{
+	auto
+	format(const JSON_Token& tkn, format_context& ctx)
+	{
+		return std::format_to(ctx.out(), "{}", tkn.data());
+	}
+};
+
+struct Production
+{
+	JSON_Token lhs;
+	std::vector<JSON_Token> rhs;
+};
+
+template<>
+struct std::formatter<Production> : std::formatter<std::string>
+{
+	auto
+	format(const Production& production, format_context& ctx)
+	{
+		std::span<const JSON_Token> span(production.rhs.begin(), production.rhs.end());
+		return std::format_to(ctx.out(), "{} -> {}", production.lhs, span);
+	}
+};
+
+struct PTable
+{
+	std::unordered_map<JSON_Token::KIND, std::unordered_map<JSON_Token::KIND, Production>> table;
+
+	void
+	add(JSON_Token::KIND nonterminal, JSON_Token::KIND terminal, const Production& production)
+	{
+		table[nonterminal][terminal] = production;
+	}
+
+	Result<Production>
+	operator()(JSON_Token::KIND nonterminal, JSON_Token::KIND terminal) const
+	{
+		assert(table.contains(nonterminal));
+
+		auto& productions = table.at(nonterminal);
+
+		if (productions.contains(terminal) == false)
+			return Error{"Unexpected terminal"};
+
+		return productions.at(terminal);
+	}
+
+	Result<Production>
+	operator()(const JSON_Token& nonterminal, const JSON_Token& terminal) const
+	{
+		return this->operator()(nonterminal.kind(), terminal.kind());
+	}
+};
+
+inline static Error
+_parse(std::span<JSON_Token> tokens, const PTable& parsing_table)
+{
+	std::stack<JSON_Token> stack{};
+	auto it = tokens.begin();
+
+	while (stack.empty() == false)
+	{
+		JSON_Token input = *it;
+
+		if (input.is_equal(stack.top()))
+		{
+			stack.pop();
+			it++;
+		}
+		else if (stack.top().is_terminal())
+		{
+			return {"Unexpected terminal"};
+		}
+		else if (auto [production, err] = parsing_table(stack.top(), input); err)
+		{
+			return err;
+		}
+		else
+		{
+			// do something with the production
+			stack.pop();
+			for (auto rhs = production.rhs.rbegin(); rhs != production.rhs.rend(); rhs++)
+				stack.push(*rhs);
+		}
+	}
+
+	return {};
+}
 
 inline static PTable&
 JSON_PTable()
@@ -338,7 +379,7 @@ JSON_PTable()
 	static PTable* _table = nullptr;
 	if (_table != nullptr)
 		return *_table;
-	
+
 	static PTable table{};
 	_table = &table;
 
@@ -347,11 +388,21 @@ JSON_PTable()
 	return *_table;
 }
 
-inline static std::span<IToken*>
+inline static Result<std::vector<JSON_Token>>
 JSON_lex(std::string_view json_string)
 {
-	assert(false && "TODO");
-	return {};
+	std::vector<JSON_Token> tokens{};
+
+	for (auto it = json_string.begin(); it != json_string.end();)
+	{
+		auto [rune, err] = utf8_read(json_string, it);
+		if (err)
+			return err;
+
+		assert(false && "TODO");
+	}
+
+	return tokens;
 }
 
 #pragma section("API")
@@ -365,10 +416,13 @@ j_version()
 J_Parse_Result
 j_parse(const char* json_string)
 {
-	auto parse_err = ll_parse(JSON_lex(json_string), JSON_PTable(), [](const Production& production) {
-		std::cout << std::format("{}", production) << std::endl;
-	});
+	auto table = JSON_PTable();
 
+	auto [json_tokens, tokens_err] = JSON_lex(json_string);
+	if (tokens_err)
+		return {J_JSON{}, tokens_err.err.data()};
+
+	auto parse_err = _parse(json_tokens, table);
 	if (parse_err)
 		return {J_JSON{}, parse_err.err.data()};
 
