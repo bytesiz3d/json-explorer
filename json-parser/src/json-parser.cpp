@@ -332,15 +332,21 @@ struct Lexer
 		STATE_NU,
 		STATE_NUL,
 
+		STATE_u,
+		STATE_uX,
+		STATE_uXX,
+		STATE_uXXX,
+
 		STATE_STRING,
 		STATE_BACKSLASH,
 	};
 
 	std::stack<STATE> _state_stack;
 	std::vector<JSON_Token> _tokens;
+	std::string _escaped_unicode_builder;
 
 	Lexer() = default;
-	Lexer(std::string_view string) : _string(string), _state_stack{}, _tokens{}
+	Lexer(std::string_view string) : _string(string), _state_stack{}, _tokens{}, _escaped_unicode_builder{}
 	{
 		_state_stack.push(STATE_0);
 	}
@@ -474,7 +480,7 @@ struct Lexer
 	Result<bool>
 	try_to_parse_escaped_character(Rune r)
 	{
-		if (_state_stack.top() != STATE_BACKSLASH) return {};
+		if (_state_stack.top() != STATE_BACKSLASH) return false;
 		switch (r)
 		{
 		case '"':
@@ -491,12 +497,62 @@ struct Lexer
 			return true;
 		}
 
-		case 'u':
-			assert(false && "TODO");
+		case 'u': {
+			_state_stack.pop();
+			_state_stack.push(STATE_u);
+			return true;
+		}
 
 		default:
 			return Error{"Invalid escaped character"};
 		}
+	}
+
+	Result<bool>
+	try_to_parse_escaped_unicode(Rune r)
+	{
+		if (_state_stack.top() == STATE_u)
+		{
+			if (::isxdigit(r) == false)
+				return Error{"Invalid escaped unicode"};
+			_escaped_unicode_builder += char(r);
+
+			_state_stack.pop();
+			_state_stack.push(STATE_uX);
+			return true;
+		}
+		if (_state_stack.top() == STATE_uX)
+		{
+			if (::isxdigit(r) == false)
+				return Error{"Invalid escaped unicode"};
+			_escaped_unicode_builder += char(r);
+
+			_state_stack.pop();
+			_state_stack.push(STATE_uXX);
+			return true;
+		}
+		if (_state_stack.top() == STATE_uXX)
+		{
+			if (::isxdigit(r) == false)
+				return Error{"Invalid escaped unicode"};
+			_escaped_unicode_builder += char(r);
+
+			_state_stack.pop();
+			_state_stack.push(STATE_uXXX);
+			return true;
+		}
+		if (_state_stack.top() == STATE_uXXX)
+		{
+			if (::isxdigit(r) == false)
+				return Error{"Invalid escaped unicode"};
+			_escaped_unicode_builder += char(r);
+
+			_state_stack.pop();
+			_tokens.emplace_back(JSON_Token::T_escaped, std::move(_escaped_unicode_builder));
+			return true;
+		}
+
+		return false;
 	}
 
 	Result<std::vector<JSON_Token>>
@@ -523,6 +579,9 @@ struct Lexer
 			else if (err) return err;
 
 			if (auto [ok, err] = try_to_parse_escaped_character(rune); ok) continue;
+			else if (err) return err;
+
+			if (auto [ok, err] = try_to_parse_escaped_unicode(rune); ok) continue;
 			else if (err) return err;
 
 			unreachable("Failed to parse character");
@@ -642,6 +701,7 @@ JSON_Token::fill_ptable(PTable& ptable)
 
 	ptable.add(N_CHARS, T_quote, {META_EPS});
 	ptable.add(N_CHARS, T_unicode, {N_CHAR, N_CHARS});
+	ptable.add(N_CHARS, T_backslash, {N_CHAR, N_CHARS});
 
 	ptable.add(N_CHAR, T_unicode, {T_unicode});
 	ptable.add(N_CHAR, T_backslash, {T_backslash, T_escaped});
