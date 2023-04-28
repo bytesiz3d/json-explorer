@@ -357,6 +357,7 @@ struct Lexer
 		if (_state_stack.top() != STATE_0)
 			return false;
 
+		// FIXME: whitespace in-between numbers
 		if (::isgraph(r) == false) // skip whitespace
 			return true;
 
