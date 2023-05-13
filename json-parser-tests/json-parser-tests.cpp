@@ -92,3 +92,18 @@ TEST_SUITE("Must Reject")
 		J_JSON_Tests::iterate("n_structure", J_JSON_Tests::EXPECT_FAIL);
 	}
 }
+
+TEST_SUITE("Dump")
+{
+	TEST_CASE("Dump")
+	{
+		J_JSON elements[]{
+			{.kind = J_JSON_NULL},
+			{.kind = J_JSON_BOOL, .as_bool = true},
+			{.kind = J_JSON_NUMBER, .as_number = 1.5}
+		};
+		J_JSON array{.kind = J_JSON_ARRAY, .as_array = {elements, 3}};
+		J_Pair pairs[]{{.key = "array", .value = array}};
+		MESSAGE(j_dump(J_JSON{.kind = J_JSON_OBJECT, .as_object = {.pairs = pairs, .count = 1}}));
+	}
+}

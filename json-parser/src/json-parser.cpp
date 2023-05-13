@@ -769,6 +769,113 @@ j_parse(const char* json_string)
 	return {json};
 }
 
+size_t
+_j_dump(J_JSON json, char* dump)
+{
+	size_t size = 0;
+	switch (json.kind)
+	{
+	case J_JSON_NULL:
+		size += 4;
+		if (dump)
+			::memcpy((void*)dump, "null", size);
+		return size;
+
+	case J_JSON_BOOL:
+		size += json.as_bool ? 4 : 5;
+		if (dump)
+			::memcpy((void*)dump, json.as_bool ? "true" : "false", size);
+		return size;
+
+	case J_JSON_NUMBER:
+		size += ::snprintf(nullptr, 0, "%lf", json.as_number);
+		if (dump)
+			::snprintf(dump, size+1, "%lf", json.as_number);
+		return size;
+
+	case J_JSON_STRING:
+		size += 1;
+		if (dump)
+			dump[0] = '"';
+
+		size += ::strlen(json.as_string);
+		if (dump)
+			::memcpy((void*)&dump[1], json.as_string, size - 1);
+
+		size += 1;
+		if (dump)
+			dump[size - 1] = '"';
+		return size;
+
+	case J_JSON_ARRAY:
+		size += 1;
+		if (dump)
+			dump[0] = '[';
+
+		for (auto it = json.as_array.ptr; it != json.as_array.ptr + json.as_array.count; it++)
+		{
+			if (it != json.as_array.ptr)
+			{
+				size += 1;
+				if (dump)
+					dump[size - 1] = ',';
+			}
+
+			size += _j_dump(*it, dump ? dump + size : nullptr);
+		}
+
+		size += 1;
+		if (dump)
+			dump[size - 1] = ']';
+		return size;
+
+	case J_JSON_OBJECT:
+		size += 1;
+		if (dump)
+			dump[0] = '{';
+
+		for (auto it = json.as_object.pairs; it != json.as_object.pairs + json.as_object.count; it++)
+		{
+			if (it != json.as_object.pairs)
+			{
+				size += 1;
+				if (dump)
+					dump[size - 1] = ',';
+			}
+
+			J_JSON key_json{.kind = J_JSON_STRING, .as_string = it->key};
+			size += _j_dump(key_json, dump ? dump + size : nullptr);
+
+			size += 1; // colon
+			if (dump)
+				dump[size - 1] = ':';
+
+			size += _j_dump(it->value, dump ? dump + size : nullptr);
+		}
+
+		size += 1;
+		if (dump)
+			dump[size - 1] = '}';
+		return size;
+		
+	default:
+		unreachable("invalid type");
+		return 0;
+	}
+}
+
+const char*
+j_dump(J_JSON json)
+{
+	// Find how much memory we need
+	size_t size = _j_dump(json, nullptr);
+
+	char* dump = (char*)::malloc(size + 1);
+	_j_dump(json, dump);
+	dump[size] = '\0';
+	return dump;
+}
+
 J_Bool
 j_get_J_Bool(J_JSON json)
 {
