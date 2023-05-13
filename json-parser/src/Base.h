@@ -33,7 +33,7 @@ struct Result
 	T val;
 	Error err;
 
-	Result(Error e) : err(e)
+	Result(Error e) : val{}, err(e)
 	{
 	}
 
@@ -89,7 +89,7 @@ struct Utf8_Iterator
 		auto bytes_read = utf8proc_iterate(it, size, &_);
 		if (bytes_read < 0)
 			return end();
-		
+
 		it += bytes_read;
 		return *this;
 	}
