@@ -1,3 +1,4 @@
+#define DOCTEST_CONFIG_TREAT_CHAR_STAR_AS_STRING
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 #include <json-parser/json-parser.h>
@@ -34,7 +35,11 @@ namespace J_JSON_Tests
 				if (expect == EXPECT_PASS)
 					CHECK_MESSAGE(!err, std::string_view(err));
 				else if (expect == EXPECT_FAIL)
+				{
+					CAPTURE(file.string().c_str());
+					CAPTURE(file_content.c_str());
 					CHECK_FALSE(!err);
+				}
 			}
 		}
 	}
@@ -42,24 +47,48 @@ namespace J_JSON_Tests
 
 TEST_SUITE("Must Accept")
 {
-	TEST_CASE("Array")
+	TEST_CASE("y_array")
 	{
 		J_JSON_Tests::iterate("y_array", J_JSON_Tests::EXPECT_PASS);
 	}
-	TEST_CASE("Number")
+	TEST_CASE("y_number")
 	{
 		J_JSON_Tests::iterate("y_number", J_JSON_Tests::EXPECT_PASS);
 	}
-	TEST_CASE("Object")
+	TEST_CASE("y_object")
 	{
 		J_JSON_Tests::iterate("y_object", J_JSON_Tests::EXPECT_PASS);
 	}
-	TEST_CASE("String")
+	TEST_CASE("y_string")
 	{
 		J_JSON_Tests::iterate("y_string", J_JSON_Tests::EXPECT_PASS);
 	}
-	TEST_CASE("Structure")
+	TEST_CASE("y_structure")
 	{
 		J_JSON_Tests::iterate("y_structure", J_JSON_Tests::EXPECT_PASS);
+	}
+}
+
+TEST_SUITE("Must Reject")
+{
+	TEST_CASE("n_array")
+	{
+		J_JSON_Tests::iterate("n_array", J_JSON_Tests::EXPECT_FAIL);
+	}
+	TEST_CASE("n_number")
+	{
+		J_JSON_Tests::iterate("n_number", J_JSON_Tests::EXPECT_FAIL);
+	}
+	TEST_CASE("n_object")
+	{
+		J_JSON_Tests::iterate("n_object", J_JSON_Tests::EXPECT_FAIL);
+	}
+	TEST_CASE("n_string")
+	{
+		J_JSON_Tests::iterate("n_string", J_JSON_Tests::EXPECT_FAIL);
+	}
+	TEST_CASE("n_structure")
+	{
+		J_JSON_Tests::iterate("n_structure", J_JSON_Tests::EXPECT_FAIL);
 	}
 }
