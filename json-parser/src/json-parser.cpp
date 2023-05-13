@@ -246,6 +246,27 @@ struct Parser
 	Parser() = default;
 	Parser(std::span<JSON_Token> tokens) : _tokens(tokens), _it(_tokens.begin()), _ptable(JSON_PTable()) {}
 
+	Error
+	advance_tokens_iterator()
+	{
+		if (_it == _tokens.end())
+			return Error{"Incomplete"};
+		_it++;
+		return Error{};
+	}
+
+	Error
+	finish_input()
+	{
+		if (_it->is_equal(JSON_Token::META_END_OF_INPUT))
+			_it++;
+
+		if (_it != _tokens.end())
+			return Error{"Trailing characters"};
+
+		return Error{};
+	}
+
 	Result<J_JSON>
 	parse()
 	{
@@ -258,7 +279,8 @@ struct Parser
 			if (input_terminal.is_equal(stack.top()))
 			{
 				stack.pop();
-				_it++;
+				if (auto err = advance_tokens_iterator())
+					return err;
 			}
 			else if (stack.top().is_terminal())
 			{
@@ -270,8 +292,6 @@ struct Parser
 			}
 			else
 			{
-				// do something with the production
-				std::cout << std::format("{}\n", production);
 				stack.pop();
 				for (auto rhs = production.rhs.rbegin(); rhs != production.rhs.rend(); rhs++)
 				{
@@ -280,7 +300,7 @@ struct Parser
 				}
 			}
 		}
-		return {};
+		return finish_input();
 	}
 };
 
@@ -305,6 +325,15 @@ struct Lexer
 		STATE_NU,
 		STATE_NUL,
 
+		STATE_NUMBER_MINUS,
+		STATE_NUMBER_INTEGER,
+		STATE_NUMBER_INTEGER_LEADING_ZERO,
+		STATE_NUMBER_FRACTION,
+		STATE_NUMBER_FRACTION_DIGITS,
+		STATE_NUMBER_EXPONENT,
+		STATE_NUMBER_EXPONENT_SIGN,
+		STATE_NUMBER_EXPONENT_DIGITS,
+
 		STATE_u,
 		STATE_uX,
 		STATE_uXX,
@@ -317,45 +346,88 @@ struct Lexer
 	std::stack<STATE> _state_stack;
 	std::vector<JSON_Token> _tokens;
 	std::array<char, 4 + 1> _escaped_unicode_string;
+	std::string _number_builder;
 
 	Lexer() = default;
-	Lexer(std::string_view string) : _string(string), _state_stack{}, _tokens{}, _escaped_unicode_string{}
+	Lexer(std::string_view string) : _string(string), _state_stack{}, _tokens{}, _escaped_unicode_string{}, _number_builder{}
 	{
 		_state_stack.push(STATE_0);
 	}
 
+	bool
+	is_whitespace(Rune rune)
+	{
+		switch (rune)
+		{
+		case 0x20: case 0x0a: case 0x0d: case 0x09:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	bool
+	is_digit(Rune rune)
+	{
+		return Rune('0') <= rune && rune <= Rune('9');
+	}
+
+	bool
+	is_hexdigit(Rune rune)
+	{
+		return is_digit(rune) || (Rune('a') <= rune && rune <= Rune('f')) || (Rune('A') <= rune && rune <= Rune('F'));
+	}
+
+	bool
+	is_singlechar_terminal(Rune rune)
+	{
+		switch (rune)
+		{
+		case JSON_Token::T_comma:
+		case JSON_Token::T_lbracket:
+		case JSON_Token::T_rbracket:
+		case JSON_Token::T_lbrace:
+		case JSON_Token::T_rbrace:
+		case JSON_Token::T_quote:
+		case JSON_Token::T_colon:
+		case JSON_Token::T_backslash:
+			return true;
+		default:
+			return false;
+		}
+	}
+
 	Result<bool>
-	try_to_parse_singlechar_terminal(Rune r)
+	try_to_parse_singlechar_terminal(Rune rune)
 	{
 		if (_state_stack.top() != STATE_0)
 			return false;
 
-		// FIXME: whitespace in-between numbers
-		if (::isgraph(r) == false) // skip whitespace
+		if (is_whitespace(rune)) // skip whitespace
 			return true;
 
-		if (::isdigit(r) && r != '0')
+		if (is_digit(rune))
+			unreachable("Found a digit");
+
+		if (is_singlechar_terminal(rune))
 		{
-			char data[]{char(r)};
-			_tokens.emplace_back(JSON_Token::T_onenine, data);
+			_tokens.emplace_back(rune);
+			if (rune == '"')
+				_state_stack.push(STATE_STRING);
 			return true;
 		}
 
-		_tokens.emplace_back(r);
-		if (r == '"')
-			_state_stack.push(STATE_STRING);
-
-		return true;
+		return false;
 	}
 
 	Result<bool>
-	try_to_parse_multichar_terminal(Rune r, std::span<const std::pair<STATE, Rune>> table, JSON_Token::KIND kind)
+	try_to_parse_multichar_terminal(Rune rune, std::span<const std::pair<STATE, Rune>> table, JSON_Token::KIND kind)
 	{
 		auto state = _state_stack.top();
 
 		if (auto [first_state, expected] = table.front(); state == first_state)
 		{
-			if (r != expected) return false;
+			if (rune != expected) return false;
 
 			auto [next_state, _] = table[1];
 			_state_stack.push(next_state);
@@ -364,7 +436,8 @@ struct Lexer
 
 		if (auto [last_state, expected] = table.back(); state == last_state)
 		{
-			if (r != expected) return Error{"Unexpected terminal"};
+			if (rune != expected)
+				return Error{"Unexpected terminal"};
 			_state_stack.pop();
 			_tokens.emplace_back(kind);
 			return true;
@@ -377,9 +450,9 @@ struct Lexer
 
 			if (state == middle_state)
 			{
-				if (r != expected) return Error{"Unexpected terminal"};
-				_state_stack.pop();
-				_state_stack.push(next_state);
+				if (rune != expected)
+					return Error{"Unexpected terminal"};
+				_state_stack.top() = next_state;
 				return true;
 			}
 		}
@@ -387,7 +460,7 @@ struct Lexer
 	}
 
 	Result<bool>
-	try_to_parse_true(Rune r)
+	try_to_parse_true(Rune rune)
 	{
 		std::pair<STATE, Rune> table[]{
 			{STATE_0, 't'},
@@ -396,11 +469,11 @@ struct Lexer
 			{STATE_TRU, 'e'},
 		};
 
-		return try_to_parse_multichar_terminal(r, table, JSON_Token::T_true);
+		return try_to_parse_multichar_terminal(rune, table, JSON_Token::T_true);
 	}
 
 	Result<bool>
-	try_to_parse_false(Rune r)
+	try_to_parse_false(Rune rune)
 	{
 		std::pair<STATE, Rune> table[]{
 			{STATE_0, 'f'},
@@ -410,11 +483,11 @@ struct Lexer
 			{STATE_FALS, 'e'},
 		};
 
-		return try_to_parse_multichar_terminal(r, table, JSON_Token::T_false);
+		return try_to_parse_multichar_terminal(rune, table, JSON_Token::T_false);
 	}
 
 	Result<bool>
-	try_to_parse_null(Rune r)
+	try_to_parse_null(Rune rune)
 	{
 		std::pair<STATE, Rune> table[]{
 			{STATE_0, 'n'},
@@ -423,32 +496,125 @@ struct Lexer
 			{STATE_NUL, 'l'},
 		};
 
-		return try_to_parse_multichar_terminal(r, table, JSON_Token::T_null);
+		return try_to_parse_multichar_terminal(rune, table, JSON_Token::T_null);
+	}
+
+	bool
+	continue_parse_number(Rune rune)
+	{
+		_number_builder += char(rune);
+		return true;
+	}
+
+	bool
+	end_parse_number()
+	{
+		_state_stack.pop();
+		_tokens.emplace_back(JSON_Token::T_number, std::move(_number_builder));
+		return false;
 	}
 
 	Result<bool>
-	try_to_parse_character_in_string(Rune r)
+	try_to_parse_number(Rune rune)
+	{
+		switch (auto state_top = _state_stack.top())
+		{
+		case STATE_0:
+		{
+			if (rune == '-')
+			{
+				_state_stack.push(STATE_NUMBER_MINUS);
+				return continue_parse_number(rune);
+			}
+
+			if (is_digit(rune) == false) return false;
+
+			_state_stack.push(rune == '0' ? STATE_NUMBER_INTEGER_LEADING_ZERO : STATE_NUMBER_INTEGER);
+			return continue_parse_number(rune);
+		}
+		case STATE_NUMBER_MINUS: {
+			if (is_digit(rune) == false) return Error{"Invalid character in number"};
+
+			_state_stack.top() = rune == '0' ? STATE_NUMBER_INTEGER_LEADING_ZERO : STATE_NUMBER_INTEGER;
+			return continue_parse_number(rune);
+		}
+		case STATE_NUMBER_INTEGER_LEADING_ZERO:
+		case STATE_NUMBER_INTEGER: {
+			if (state_top == STATE_NUMBER_INTEGER_LEADING_ZERO && is_digit(rune))
+				return Error{"Leading zero"};
+
+			if (rune == '.')
+			{
+				_state_stack.top() = STATE_NUMBER_FRACTION;
+				return continue_parse_number(rune);
+			}
+			if (rune == 'e' || rune == 'E')
+			{
+				_state_stack.top() = STATE_NUMBER_EXPONENT;
+				return continue_parse_number(rune);
+			}
+
+			return is_digit(rune) ? continue_parse_number(rune) : end_parse_number();
+		}
+		case STATE_NUMBER_FRACTION: {
+			if (is_digit(rune) == false) return Error{"Invalid fraction"};
+
+			_state_stack.top() = STATE_NUMBER_FRACTION_DIGITS;
+			return continue_parse_number(rune);
+		}
+		case STATE_NUMBER_FRACTION_DIGITS: {
+			if (rune == 'e' || rune == 'E')
+			{
+				_state_stack.top() = STATE_NUMBER_EXPONENT;
+				return continue_parse_number(rune);
+			}
+
+			return is_digit(rune) ? continue_parse_number(rune) : end_parse_number();
+		}
+		case STATE_NUMBER_EXPONENT:
+		case STATE_NUMBER_EXPONENT_SIGN: {
+			if (state_top == STATE_NUMBER_EXPONENT && (rune == '-' || rune == '+'))
+			{
+				_state_stack.top() = STATE_NUMBER_EXPONENT_SIGN;
+				return continue_parse_number(rune);
+			}
+
+			if (is_digit(rune) == false) return Error{"Invalid exponent"};
+
+			_state_stack.top() = STATE_NUMBER_EXPONENT_DIGITS;
+			return continue_parse_number(rune);
+		}
+		case STATE_NUMBER_EXPONENT_DIGITS: {
+			return is_digit(rune) ? continue_parse_number(rune) : end_parse_number();
+		}
+		default:
+			return false;
+		}
+	}
+
+	Result<bool>
+	try_to_parse_character_in_string(Rune rune)
 	{
 		if (_state_stack.top() != STATE_STRING) return false;
 
-		if (r == '"')
+		if (rune == '"')
 		{
 			_state_stack.pop();
-			_tokens.emplace_back(r);
+			_tokens.emplace_back(rune);
 			return true;
 		}
 
-		if (r == '\\')
+		if (rune == '\\')
 		{
 			_state_stack.push(STATE_BACKSLASH);
-			_tokens.emplace_back(r);
+			_tokens.emplace_back(rune);
 			return true;
 		}
 
-		if (0x20 <= r && r <= 0x10ffff)
+		if (Rune(0x20) <= rune && rune <= Rune(0x10ffff))
 		{
 			char utf8[5]{};
-			utf8proc_encode_char(r, (utf8proc_uint8_t*)utf8);
+			utf8proc_encode_char(rune, (utf8proc_uint8_t*)utf8);
 			_tokens.emplace_back(JSON_Token::T_unicode, utf8);
 			return true;
 		}
@@ -457,10 +623,10 @@ struct Lexer
 	}
 
 	Result<bool>
-	try_to_parse_escaped_character(Rune r)
+	try_to_parse_escaped_character(Rune rune)
 	{
 		if (_state_stack.top() != STATE_BACKSLASH) return false;
-		switch (r)
+		switch (rune)
 		{
 		case '"':
 		case '\\':
@@ -471,14 +637,13 @@ struct Lexer
 		case 'r':
 		case 't': {
 			_state_stack.pop();
-			char data[]{char(r)};
+			char data[]{char(rune)};
 			_tokens.emplace_back(JSON_Token::T_escaped, data);
 			return true;
 		}
 
 		case 'u': {
-			_state_stack.pop();
-			_state_stack.push(STATE_u);
+			_state_stack.top() = STATE_u;
 			return true;
 		}
 
@@ -488,43 +653,40 @@ struct Lexer
 	}
 
 	Result<bool>
-	try_to_parse_escaped_unicode(Rune r)
+	try_to_parse_escaped_unicode(Rune rune)
 	{
 		if (_state_stack.top() == STATE_u)
 		{
-			if (::isxdigit(r) == false)
+			if (is_hexdigit(rune) == false)
 				return Error{"Invalid escaped unicode"};
-			_escaped_unicode_string[0] = r;
+			_escaped_unicode_string[0] = rune;
 
-			_state_stack.pop();
-			_state_stack.push(STATE_uX);
+			_state_stack.top() = STATE_uX;
 			return true;
 		}
 		if (_state_stack.top() == STATE_uX)
 		{
-			if (::isxdigit(r) == false)
+			if (is_hexdigit(rune) == false)
 				return Error{"Invalid escaped unicode"};
-			_escaped_unicode_string[1] = r;
+			_escaped_unicode_string[1] = rune;
 
-			_state_stack.pop();
-			_state_stack.push(STATE_uXX);
+			_state_stack.top() = STATE_uXX;
 			return true;
 		}
 		if (_state_stack.top() == STATE_uXX)
 		{
-			if (::isxdigit(r) == false)
+			if (is_hexdigit(rune) == false)
 				return Error{"Invalid escaped unicode"};
-			_escaped_unicode_string[2] = r;
+			_escaped_unicode_string[2] = rune;
 
-			_state_stack.pop();
-			_state_stack.push(STATE_uXXX);
+			_state_stack.top() = STATE_uXXX;
 			return true;
 		}
 		if (_state_stack.top() == STATE_uXXX)
 		{
-			if (::isxdigit(r) == false)
+			if (is_hexdigit(rune) == false)
 				return Error{"Invalid escaped unicode"};
-			_escaped_unicode_string[3] = r;
+			_escaped_unicode_string[3] = rune;
 
 			_state_stack.pop();
 			_tokens.emplace_back(JSON_Token::T_escaped, _escaped_unicode_string.data());
@@ -535,6 +697,36 @@ struct Lexer
 		return false;
 	}
 
+	Error
+	try_to_parse(Rune rune)
+	{
+		if (auto [ok, err] = try_to_parse_character_in_string(rune); ok) return Error{};
+		else if (err) return err;
+
+		if (auto [ok, err] = try_to_parse_escaped_character(rune); ok) return Error{};
+		else if (err) return err;
+
+		if (auto [ok, err] = try_to_parse_escaped_unicode(rune); ok) return Error{};
+		else if (err) return err;
+
+		if (auto [ok, err] = try_to_parse_null(rune); ok) return Error{};
+		else if (err) return err;
+
+		if (auto [ok, err] = try_to_parse_true(rune); ok) return Error{};
+		else if (err) return err;
+
+		if (auto [ok, err] = try_to_parse_false(rune); ok) return Error{};
+		else if (err) return err;
+
+		if (auto [ok, err] = try_to_parse_number(rune); ok) return Error{};
+		else if (err) return err;
+
+		if (auto [ok, err] = try_to_parse_singlechar_terminal(rune); ok) return Error{};
+		else if (err) return err;
+
+		return Error{"Invalid character"};
+	}
+
 	Result<std::vector<JSON_Token>>
 	lex()
 	{
@@ -543,30 +735,11 @@ struct Lexer
 			if (err)
 				return err;
 
-			if (auto [ok, err] = try_to_parse_null(rune); ok) continue;
-			else if (err) return err;
-
-			if (auto [ok, err] = try_to_parse_true(rune); ok) continue;
-			else if (err) return err;
-
-			if (auto [ok, err] = try_to_parse_false(rune); ok) continue;
-			else if (err) return err;
-
-			if (auto [ok, err] = try_to_parse_singlechar_terminal(rune); ok) continue;
-			else if (err) return err;
-
-			if (auto [ok, err] = try_to_parse_character_in_string(rune); ok) continue;
-			else if (err) return err;
-
-			if (auto [ok, err] = try_to_parse_escaped_character(rune); ok) continue;
-			else if (err) return err;
-
-			if (auto [ok, err] = try_to_parse_escaped_unicode(rune); ok) continue;
-			else if (err) return err;
-
-			unreachable("Failed to parse character");
+			if (auto parse_err = try_to_parse(rune))
+				return parse_err;
 		}
 
+		try_to_parse(Rune(JSON_Token::META_END_OF_INPUT));
 		_tokens.emplace_back(JSON_Token::META_END_OF_INPUT);
 		return std::move(_tokens);
 	}
