@@ -1,6 +1,5 @@
 #include "json-parser/json-parser.h"
 #include "Base.h"
-#include "utf8proc.h"
 
 #include <array>
 #include <format>
@@ -13,6 +12,8 @@
 #include <vector>
 
 #include <assert.h>
+
+#include <utf8proc.h>
 
 // OPTIMIZE:
 // * Profile standard library RAII containers and search for replacements
@@ -38,16 +39,10 @@ struct JSON_Token
 		T_lbrace    = '{',
 		T_rbrace    = '}',
 		T_quote     = '"',
-		T_zero      = '0',
-		T_e         = 'e',
-		T_E         = 'E',
-		T_minus     = '-',
-		T_plus      = '+',
-		T_dot       = '.',
 		T_colon     = ':',
 		T_backslash = '\\',
 
-		T_onenine = 0x1000, // data is relevant
+		T_number = 0x1000,  // data is relevant
 		T_unicode,          // data is relevant
 		T_escaped,          // data is relevant
 
@@ -59,18 +54,11 @@ struct JSON_Token
 
 		N_ARRAY,
 		N_ELEMENTS,
+		N_MORE_ELEMENTS,
 
 		N_STRING,
 		N_CHARS,
 		N_CHAR,
-
-		N_NUMBER,
-		N_INTEGER,
-		N_DIGIT,
-		N_DIGITS,
-		N_FRACTION,
-		N_EXPONENT,
-		N_SIGN,
 	} _kind;
 
 	// OPTIMIZE: Maybe string_view
@@ -107,17 +95,11 @@ struct JSON_Token
 		case T_lbrace:    return "{";
 		case T_rbrace:    return "}";
 		case T_quote:     return "\"";
-		case T_zero:      return "0";
-		case T_e:         return "e";
-		case T_E:         return "E";
-		case T_minus:     return "-";
-		case T_plus:      return "+";
-		case T_dot:       return ".";
 		case T_colon:     return ":";
 		case T_backslash: return "\\";
 
 		case T_unicode:
-		case T_onenine:
+		case T_number:
 		case T_escaped:
 			return _data;
 
@@ -129,18 +111,15 @@ struct JSON_Token
 
 		case N_ARRAY:    return "<ARRAY>";
 		case N_ELEMENTS: return "<ELEMENTS>";
+		case N_MORE_ELEMENTS: return "<MORE_ELEMENTS>";
 
 		case N_STRING: return "<STRING>";
 		case N_CHARS:  return "<CHARS>";
 		case N_CHAR:   return "<CHAR>";
 
-		case N_NUMBER:   return "<NUMBER>";
-		case N_INTEGER:  return "<INTEGER>";
-		case N_DIGIT:    return "<DIGIT>";
-		case N_DIGITS:   return "<DIGITS>";
-		case N_FRACTION: return "<FRACTION>";
-		case N_EXPONENT: return "<EXPONENT>";
-		case N_SIGN:     return "<SIGN>";
+		default:
+			unreachable("Invalid token");
+			return "";
 		}
 	}
 
@@ -162,16 +141,10 @@ struct JSON_Token
 		case T_lbrace:
 		case T_rbrace:
 		case T_quote:
-		case T_zero:
-		case T_e:
-		case T_E:
-		case T_minus:
-		case T_plus:
-		case T_dot:
 		case T_colon:
 		case T_backslash:
 
-		case T_onenine:
+		case T_number:
 		case T_unicode:
 		case T_escaped:
 
@@ -664,9 +637,7 @@ JSON_Token::fill_ptable(PTable& ptable)
 	ptable.add(META_START, T_lbracket, {N_V});
 	ptable.add(META_START, T_lbrace, {N_V});
 	ptable.add(META_START, T_quote, {N_V});
-	ptable.add(META_START, T_zero, {N_V});
-	ptable.add(META_START, T_onenine, {N_V});
-	ptable.add(META_START, T_minus, {N_V});
+	ptable.add(META_START, T_number, {N_V});
 	ptable.add(META_START, T_true, {N_V});
 	ptable.add(META_START, T_false, {N_V});
 	ptable.add(META_START, T_null, {N_V});
@@ -674,9 +645,7 @@ JSON_Token::fill_ptable(PTable& ptable)
 	ptable.add(N_V, T_lbracket, {N_ARRAY});
 	ptable.add(N_V, T_lbrace, {N_OBJECT});
 	ptable.add(N_V, T_quote, {N_STRING});
-	ptable.add(N_V, T_zero, {N_NUMBER});
-	ptable.add(N_V, T_onenine, {N_NUMBER});
-	ptable.add(N_V, T_minus, {N_NUMBER});
+	ptable.add(N_V, T_number, {T_number});
 	ptable.add(N_V, T_true, {T_true});
 	ptable.add(N_V, T_false, {T_false});
 	ptable.add(N_V, T_null, {T_null});
@@ -691,18 +660,18 @@ JSON_Token::fill_ptable(PTable& ptable)
 
 	ptable.add(N_ARRAY, T_lbracket, {T_lbracket, N_ELEMENTS, T_rbracket});
 
-	ptable.add(N_ELEMENTS, T_comma, {T_comma, N_V, N_ELEMENTS});
 	ptable.add(N_ELEMENTS, T_rbracket, {META_EPS});
 
-	ptable.add(N_ELEMENTS, T_lbracket, {N_V, N_ELEMENTS});
-	ptable.add(N_ELEMENTS, T_lbrace, {N_V, N_ELEMENTS});
-	ptable.add(N_ELEMENTS, T_quote, {N_V, N_ELEMENTS});
-	ptable.add(N_ELEMENTS, T_zero, {N_V, N_ELEMENTS});
-	ptable.add(N_ELEMENTS, T_onenine, {N_V, N_ELEMENTS});
-	ptable.add(N_ELEMENTS, T_minus, {N_V, N_ELEMENTS});
-	ptable.add(N_ELEMENTS, T_true, {N_V, N_ELEMENTS});
-	ptable.add(N_ELEMENTS, T_false, {N_V, N_ELEMENTS});
-	ptable.add(N_ELEMENTS, T_null, {N_V, N_ELEMENTS});
+	ptable.add(N_ELEMENTS, T_lbracket, {N_V, N_MORE_ELEMENTS});
+	ptable.add(N_ELEMENTS, T_lbrace, {N_V, N_MORE_ELEMENTS});
+	ptable.add(N_ELEMENTS, T_quote, {N_V, N_MORE_ELEMENTS});
+	ptable.add(N_ELEMENTS, T_number, {N_V, N_MORE_ELEMENTS});
+	ptable.add(N_ELEMENTS, T_true, {N_V, N_MORE_ELEMENTS});
+	ptable.add(N_ELEMENTS, T_false, {N_V, N_MORE_ELEMENTS});
+	ptable.add(N_ELEMENTS, T_null, {N_V, N_MORE_ELEMENTS});
+
+	ptable.add(N_MORE_ELEMENTS, T_rbracket, {META_EPS});
+	ptable.add(N_MORE_ELEMENTS, T_comma, {T_comma, N_V, N_MORE_ELEMENTS});
 
 	ptable.add(N_STRING, T_quote, {T_quote, N_CHARS, T_quote});
 
@@ -712,44 +681,4 @@ JSON_Token::fill_ptable(PTable& ptable)
 
 	ptable.add(N_CHAR, T_unicode, {T_unicode});
 	ptable.add(N_CHAR, T_backslash, {T_backslash, T_escaped});
-
-	ptable.add(N_NUMBER, T_zero, {N_INTEGER, N_FRACTION, N_EXPONENT});
-	ptable.add(N_NUMBER, T_onenine, {N_INTEGER, N_FRACTION, N_EXPONENT});
-	ptable.add(N_NUMBER, T_minus, {T_minus, N_INTEGER, N_FRACTION, N_EXPONENT});
-
-	ptable.add(N_INTEGER, T_zero, {T_zero});
-	ptable.add(N_INTEGER, T_onenine, {T_onenine, N_DIGITS});
-
-	ptable.add(N_DIGIT, T_zero, {T_zero});
-	ptable.add(N_DIGIT, T_onenine, {T_onenine});
-
-	ptable.add(N_DIGITS, T_comma, {META_EPS});
-	ptable.add(N_DIGITS, T_rbracket, {META_EPS});
-	ptable.add(N_DIGITS, T_rbrace, {META_EPS});
-	ptable.add(N_DIGITS, T_zero, {N_DIGIT, N_DIGITS});
-	ptable.add(N_DIGITS, T_onenine, {N_DIGIT, N_DIGITS});
-	ptable.add(N_DIGITS, T_e, {META_EPS});
-	ptable.add(N_DIGITS, T_E, {META_EPS});
-	ptable.add(N_DIGITS, T_dot, {META_EPS});
-	ptable.add(N_DIGITS, META_END_OF_INPUT, {META_EPS});
-
-	ptable.add(N_FRACTION, T_comma, {META_EPS});
-	ptable.add(N_FRACTION, T_rbracket, {META_EPS});
-	ptable.add(N_FRACTION, T_rbrace, {META_EPS});
-	ptable.add(N_FRACTION, T_dot, {T_dot, N_DIGIT, N_DIGITS});
-	ptable.add(N_FRACTION, T_e, {META_EPS});
-	ptable.add(N_FRACTION, T_E, {META_EPS});
-	ptable.add(N_FRACTION, META_END_OF_INPUT, {META_EPS});
-
-	ptable.add(N_EXPONENT, T_comma, {META_EPS});
-	ptable.add(N_EXPONENT, T_rbracket, {META_EPS});
-	ptable.add(N_EXPONENT, T_rbrace, {META_EPS});
-	ptable.add(N_EXPONENT, T_e, {T_e, N_SIGN, N_DIGIT, N_DIGITS});
-	ptable.add(N_EXPONENT, T_E, {T_E, N_SIGN, N_DIGIT, N_DIGITS});
-	ptable.add(N_EXPONENT, META_END_OF_INPUT, {META_EPS});
-
-	ptable.add(N_SIGN, T_zero, {META_EPS});
-	ptable.add(N_SIGN, T_onenine, {META_EPS});
-	ptable.add(N_SIGN, T_minus, {T_minus});
-	ptable.add(N_SIGN, T_plus, {T_plus});
 }
