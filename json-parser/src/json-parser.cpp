@@ -343,10 +343,10 @@ struct Lexer
 
 	std::stack<STATE> _state_stack;
 	std::vector<JSON_Token> _tokens;
-	std::string _escaped_unicode_builder;
+	std::array<char, 4 + 1> _escaped_unicode_string;
 
 	Lexer() = default;
-	Lexer(std::string_view string) : _string(string), _state_stack{}, _tokens{}, _escaped_unicode_builder{}
+	Lexer(std::string_view string) : _string(string), _state_stack{}, _tokens{}, _escaped_unicode_string{}
 	{
 		_state_stack.push(STATE_0);
 	}
@@ -472,10 +472,15 @@ struct Lexer
 			return true;
 		}
 
-		char utf8[5]{};
-		utf8proc_encode_char(r, (utf8proc_uint8_t*)utf8);
-		_tokens.emplace_back(JSON_Token::T_unicode, utf8);
-		return true;
+		if (0x20 <= r && r <= 0x10ffff)
+		{
+			char utf8[5]{};
+			utf8proc_encode_char(r, (utf8proc_uint8_t*)utf8);
+			_tokens.emplace_back(JSON_Token::T_unicode, utf8);
+			return true;
+		}
+
+		return Error{"Invalid unicode character"};
 	}
 
 	Result<bool>
@@ -516,7 +521,7 @@ struct Lexer
 		{
 			if (::isxdigit(r) == false)
 				return Error{"Invalid escaped unicode"};
-			_escaped_unicode_builder += char(r);
+			_escaped_unicode_string[0] = r;
 
 			_state_stack.pop();
 			_state_stack.push(STATE_uX);
@@ -526,7 +531,7 @@ struct Lexer
 		{
 			if (::isxdigit(r) == false)
 				return Error{"Invalid escaped unicode"};
-			_escaped_unicode_builder += char(r);
+			_escaped_unicode_string[1] = r;
 
 			_state_stack.pop();
 			_state_stack.push(STATE_uXX);
@@ -536,7 +541,7 @@ struct Lexer
 		{
 			if (::isxdigit(r) == false)
 				return Error{"Invalid escaped unicode"};
-			_escaped_unicode_builder += char(r);
+			_escaped_unicode_string[2] = r;
 
 			_state_stack.pop();
 			_state_stack.push(STATE_uXXX);
@@ -546,10 +551,11 @@ struct Lexer
 		{
 			if (::isxdigit(r) == false)
 				return Error{"Invalid escaped unicode"};
-			_escaped_unicode_builder += char(r);
+			_escaped_unicode_string[3] = r;
 
 			_state_stack.pop();
-			_tokens.emplace_back(JSON_Token::T_escaped, std::move(_escaped_unicode_builder));
+			_tokens.emplace_back(JSON_Token::T_escaped, _escaped_unicode_string.data());
+			_escaped_unicode_string.fill('\0'); // clear the string
 			return true;
 		}
 
@@ -687,7 +693,7 @@ JSON_Token::fill_ptable(PTable& ptable)
 
 	ptable.add(N_ELEMENTS, T_comma, {T_comma, N_V, N_ELEMENTS});
 	ptable.add(N_ELEMENTS, T_rbracket, {META_EPS});
-	
+
 	ptable.add(N_ELEMENTS, T_lbracket, {N_V, N_ELEMENTS});
 	ptable.add(N_ELEMENTS, T_lbrace, {N_V, N_ELEMENTS});
 	ptable.add(N_ELEMENTS, T_quote, {N_V, N_ELEMENTS});

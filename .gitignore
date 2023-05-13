@@ -88,3 +88,4 @@ $RECYCLE.BIN/
 .cache/
 [Bb]uild/
 .vscode/
+**/Exports.h
