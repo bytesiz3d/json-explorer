@@ -76,6 +76,8 @@ j_parse(const char* json_string);
 JSON_PARSER_EXPORT const char*
 j_dump(J_JSON json);
 
+// TODO: Free functions
+
 #define j_get(J_TYPE, json) j_get_##J_TYPE(json)
 
 JSON_PARSER_EXPORT J_Bool

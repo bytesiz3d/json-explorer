@@ -343,27 +343,6 @@ struct Parser
 	Parser() = default;
 	Parser(std::span<JSON_Token> tokens) : _tokens(tokens), _it(_tokens.begin()), _ptable(JSON_PTable()) {}
 
-	Error
-	advance_tokens_iterator()
-	{
-		if (_it == _tokens.end())
-			return Error{"Incomplete"};
-		_it++;
-		return Error{};
-	}
-
-	Error
-	finish_input()
-	{
-		if (_it->is_equal(JSON_Token::META_END_OF_INPUT))
-			_it++;
-
-		if (_it != _tokens.end())
-			return Error{"Trailing characters"};
-
-		return Error{};
-	}
-
 	Result<J_JSON>
 	parse()
 	{
