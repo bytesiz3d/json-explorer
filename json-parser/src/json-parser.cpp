@@ -956,35 +956,35 @@ J_Bool
 j_get_J_Bool(J_JSON json)
 {
 	assert(json.kind == J_JSON_BOOL);
-	return {};
+	return json.as_bool;
 }
 
 J_Number
 j_get_J_Number(J_JSON json)
 {
 	assert(json.kind == J_JSON_NUMBER);
-	return {};
+	return json.as_number;
 }
 
 J_String
 j_get_J_String(J_JSON json)
 {
 	assert(json.kind == J_JSON_STRING);
-	return {};
+	return json.as_string;
 }
 
 J_Array
 j_get_J_Array(J_JSON json)
 {
 	assert(json.kind == J_JSON_ARRAY);
-	return {};
+	return json.as_array;
 }
 
 J_Object
 j_get_J_Object(J_JSON json)
 {
 	assert(json.kind == J_JSON_OBJECT);
-	return {};
+	return json.as_object;
 }
 
 void
