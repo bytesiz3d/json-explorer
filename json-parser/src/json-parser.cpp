@@ -223,6 +223,117 @@ JSON_PTable()
 	return *ptable;
 }
 
+struct JSON_Builder
+{
+	struct Context
+	{
+		J_JSON json;
+		std::vector<J_JSON> array_builder;
+		std::vector<J_Pair> object_builder;
+	};
+	std::stack<Context> _context;
+
+	JSON_Builder() : _context{}
+	{
+		_context.push(Context{});
+	}
+
+	J_JSON
+	yield()
+	{
+		return _context.top().json;
+	}
+
+	void
+	set_json(J_JSON json)
+	{
+		auto &ctx = _context.top();
+		if (ctx.json.kind == J_JSON_ARRAY) // build array
+		{
+			ctx.array_builder.push_back(json);
+		}
+		else if (ctx.json.kind == J_JSON_OBJECT)
+		{
+			if (ctx.object_builder.back().key)
+			{
+				ctx.object_builder.back().value = json;
+				ctx.object_builder.push_back({});
+			}
+			else
+			{
+				assert(json.kind == J_JSON_STRING);
+				ctx.object_builder.back().key = json.as_string;
+			}
+		}
+		else
+		{
+			ctx.json = json;
+		}
+	}
+
+	void
+	token(const JSON_Token &tkn)
+	{
+		switch (tkn.kind())
+		{
+		case JSON_Token::T_null:
+			return set_json({.kind = J_JSON_NULL});
+
+		case JSON_Token::T_true:
+			return set_json({.kind = J_JSON_BOOL, .as_bool = true});
+
+		case JSON_Token::T_false:
+			return set_json({.kind = J_JSON_BOOL, .as_bool = false});
+
+		case JSON_Token::T_number:
+			return set_json({.kind = J_JSON_NUMBER, .as_number = ::atof(tkn.data().data())});
+
+		case JSON_Token::T_string:
+			return set_json({.kind = J_JSON_STRING, .as_string = ::strdup(tkn.data().data())});
+
+		case JSON_Token::T_lbracket:
+			return _context.push(Context{.json{J_JSON_ARRAY}});
+
+		case JSON_Token::T_lbrace:
+			_context.push(Context{.json{J_JSON_OBJECT}});
+			return _context.top().object_builder.push_back({}); // dummy
+
+		case JSON_Token::T_rbracket:
+		case JSON_Token::T_rbrace: {
+			auto last_ctx = std::move(_context.top());
+			if (last_ctx.json.kind == J_JSON_ARRAY)
+			{
+				assert(last_ctx.object_builder.empty());
+				size_t sz = last_ctx.array_builder.size() * sizeof(J_JSON);
+				last_ctx.json.as_array = {
+					.ptr = (J_JSON*)::malloc(sz),
+					.count = last_ctx.array_builder.size()
+				};
+				::memcpy(last_ctx.json.as_array.ptr, last_ctx.array_builder.data(), sz);
+			}
+			else if (last_ctx.json.kind == J_JSON_OBJECT)
+			{
+				assert(last_ctx.array_builder.empty());
+				assert(last_ctx.object_builder.back().key == nullptr);
+				last_ctx.object_builder.pop_back();
+
+				size_t sz = last_ctx.object_builder.size() * sizeof(J_Pair);
+				last_ctx.json.as_object = {
+					.pairs = (J_Pair*)::malloc(sz),
+					.count = last_ctx.object_builder.size()
+				};
+				::memcpy(last_ctx.json.as_object.pairs, last_ctx.object_builder.data(), sz);
+			}
+
+			_context.pop();
+			set_json(last_ctx.json);
+		}
+
+		default: break;
+		}
+	}
+};
+
 struct Parser
 {
 	std::span<JSON_Token> _tokens;
@@ -257,7 +368,9 @@ struct Parser
 	parse()
 	{
 		std::stack<JSON_Token> stack{};
-		stack.push(JSON_Token::META_START);
+		stack.emplace(JSON_Token::META_START);
+
+		JSON_Builder builder{};
 
 		while (stack.empty() == false)
 		{
@@ -265,8 +378,10 @@ struct Parser
 			if (input_terminal.is_equal(stack.top()))
 			{
 				stack.pop();
-				if (auto err = advance_tokens_iterator())
-					return err;
+				builder.token(input_terminal);
+
+				_it++;
+				if (_it == _tokens.end()) return Error{"Incomplete"};
 			}
 			else if (stack.top().is_terminal())
 			{
@@ -286,7 +401,12 @@ struct Parser
 				}
 			}
 		}
-		return finish_input();
+
+		if (_it->is_equal(JSON_Token::META_END_OF_INPUT) == false)
+			return Error{"Trailing characters"};
+		assert(_it + 1 == _tokens.end());
+
+		return builder.yield();
 	}
 };
 
