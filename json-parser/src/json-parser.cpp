@@ -38,13 +38,11 @@ struct JSON_Token
 		T_rbracket  = ']',
 		T_lbrace    = '{',
 		T_rbrace    = '}',
-		T_quote     = '"',
 		T_colon     = ':',
 		T_backslash = '\\',
 
 		T_number = 0x1000,  // data is relevant
-		T_unicode,          // data is relevant
-		T_escaped,          // data is relevant
+		T_string,           // data is relevant
 
 		N_V = 0x10000,
 
@@ -55,10 +53,6 @@ struct JSON_Token
 		N_ARRAY,
 		N_ELEMENTS,
 		N_MORE_ELEMENTS,
-
-		N_STRING,
-		N_CHARS,
-		N_CHAR,
 	} _kind;
 
 	// OPTIMIZE: Maybe string_view
@@ -94,13 +88,11 @@ struct JSON_Token
 		case T_rbracket:  return "]";
 		case T_lbrace:    return "{";
 		case T_rbrace:    return "}";
-		case T_quote:     return "\"";
 		case T_colon:     return ":";
 		case T_backslash: return "\\";
 
-		case T_unicode:
 		case T_number:
-		case T_escaped:
+		case T_string:
 			return _data;
 
 		case N_V: return "<V>";
@@ -112,10 +104,6 @@ struct JSON_Token
 		case N_ARRAY:    return "<ARRAY>";
 		case N_ELEMENTS: return "<ELEMENTS>";
 		case N_MORE_ELEMENTS: return "<MORE_ELEMENTS>";
-
-		case N_STRING: return "<STRING>";
-		case N_CHARS:  return "<CHARS>";
-		case N_CHAR:   return "<CHAR>";
 
 		default:
 			unreachable("Invalid token");
@@ -140,13 +128,11 @@ struct JSON_Token
 		case T_rbracket:
 		case T_lbrace:
 		case T_rbrace:
-		case T_quote:
 		case T_colon:
 		case T_backslash:
 
 		case T_number:
-		case T_unicode:
-		case T_escaped:
+		case T_string:
 
 		case META_END_OF_INPUT:
 			return true;
@@ -338,6 +324,7 @@ struct Lexer
 		STATE_uX,
 		STATE_uXX,
 		STATE_uXXX,
+		STATE_uXXXX,
 
 		STATE_STRING,
 		STATE_BACKSLASH,
@@ -345,11 +332,11 @@ struct Lexer
 
 	std::stack<STATE> _state_stack;
 	std::vector<JSON_Token> _tokens;
-	std::array<char, 4 + 1> _escaped_unicode_string;
+	std::string _string_builder;
 	std::string _number_builder;
 
 	Lexer() = default;
-	Lexer(std::string_view string) : _string(string), _state_stack{}, _tokens{}, _escaped_unicode_string{}, _number_builder{}
+	Lexer(std::string_view string) : _string(string), _state_stack{}, _tokens{}, _number_builder{}
 	{
 		_state_stack.push(STATE_0);
 	}
@@ -388,7 +375,6 @@ struct Lexer
 		case JSON_Token::T_rbracket:
 		case JSON_Token::T_lbrace:
 		case JSON_Token::T_rbrace:
-		case JSON_Token::T_quote:
 		case JSON_Token::T_colon:
 		case JSON_Token::T_backslash:
 			return true;
@@ -409,11 +395,15 @@ struct Lexer
 		if (is_digit(rune))
 			unreachable("Found a digit");
 
+		if (rune == '"')
+		{
+			_state_stack.push(STATE_STRING);
+			return true;
+		}
+
 		if (is_singlechar_terminal(rune))
 		{
 			_tokens.emplace_back(rune);
-			if (rune == '"')
-				_state_stack.push(STATE_STRING);
 			return true;
 		}
 
@@ -511,7 +501,31 @@ struct Lexer
 	{
 		_state_stack.pop();
 		_tokens.emplace_back(JSON_Token::T_number, std::move(_number_builder));
+		_number_builder.clear();
 		return false;
+	}
+
+	bool
+	continue_parse_string(Rune rune)
+	{
+		_string_builder += char(rune);
+		return true;
+	}
+
+	bool
+	continue_parse_string(const char *str)
+	{
+		_string_builder += str;
+		return true;
+	}
+
+	bool
+	end_parse_string()
+	{
+		_state_stack.pop();
+		_tokens.emplace_back(JSON_Token::T_string, std::move(_string_builder));
+		_string_builder.clear();
+		return true;
 	}
 
 	Result<bool>
@@ -598,25 +612,16 @@ struct Lexer
 		if (_state_stack.top() != STATE_STRING) return false;
 
 		if (rune == '"')
-		{
-			_state_stack.pop();
-			_tokens.emplace_back(rune);
-			return true;
-		}
-
-		if (rune == '\\')
-		{
-			_state_stack.push(STATE_BACKSLASH);
-			_tokens.emplace_back(rune);
-			return true;
-		}
+			return end_parse_string();
 
 		if (Rune(0x20) <= rune && rune <= Rune(0x10ffff))
 		{
+			if (rune == '\\')
+				_state_stack.push(STATE_BACKSLASH);
+
 			char utf8[5]{};
 			utf8proc_encode_char(rune, (utf8proc_uint8_t*)utf8);
-			_tokens.emplace_back(JSON_Token::T_unicode, utf8);
-			return true;
+			return continue_parse_string(utf8);
 		}
 
 		return Error{"Invalid unicode character"};
@@ -637,14 +642,12 @@ struct Lexer
 		case 'r':
 		case 't': {
 			_state_stack.pop();
-			char data[]{char(rune)};
-			_tokens.emplace_back(JSON_Token::T_escaped, data);
-			return true;
+			return continue_parse_string(rune);
 		}
 
 		case 'u': {
 			_state_stack.top() = STATE_u;
-			return true;
+			return continue_parse_string(rune);
 		}
 
 		default:
@@ -655,46 +658,20 @@ struct Lexer
 	Result<bool>
 	try_to_parse_escaped_unicode(Rune rune)
 	{
-		if (_state_stack.top() == STATE_u)
-		{
-			if (is_hexdigit(rune) == false)
-				return Error{"Invalid escaped unicode"};
-			_escaped_unicode_string[0] = rune;
+		if (_state_stack.top() != STATE_u
+			&& _state_stack.top() != STATE_uX
+			&& _state_stack.top() != STATE_uXX
+			&& _state_stack.top() != STATE_uXXX
+		) return false;
 
-			_state_stack.top() = STATE_uX;
-			return true;
-		}
-		if (_state_stack.top() == STATE_uX)
-		{
-			if (is_hexdigit(rune) == false)
-				return Error{"Invalid escaped unicode"};
-			_escaped_unicode_string[1] = rune;
+		if (is_hexdigit(rune) == false)
+			return Error{"Invalid escaped unicode"};
 
-			_state_stack.top() = STATE_uXX;
-			return true;
-		}
-		if (_state_stack.top() == STATE_uXX)
-		{
-			if (is_hexdigit(rune) == false)
-				return Error{"Invalid escaped unicode"};
-			_escaped_unicode_string[2] = rune;
-
-			_state_stack.top() = STATE_uXXX;
-			return true;
-		}
-		if (_state_stack.top() == STATE_uXXX)
-		{
-			if (is_hexdigit(rune) == false)
-				return Error{"Invalid escaped unicode"};
-			_escaped_unicode_string[3] = rune;
-
+		_state_stack.top() = STATE(_state_stack.top() + 1);
+		if (_state_stack.top() == STATE_uXXXX)
 			_state_stack.pop();
-			_tokens.emplace_back(JSON_Token::T_escaped, _escaped_unicode_string.data());
-			_escaped_unicode_string.fill('\0'); // clear the string
-			return true;
-		}
 
-		return false;
+		return continue_parse_string(rune);
 	}
 
 	Error
@@ -914,51 +891,41 @@ j_get_J_Object(J_JSON json)
 void
 JSON_Token::fill_ptable(PTable& ptable)
 {
-	ptable.add(META_START, T_lbracket, {N_V});
-	ptable.add(META_START, T_lbrace, {N_V});
-	ptable.add(META_START, T_quote, {N_V});
-	ptable.add(META_START, T_number, {N_V});
+	ptable.add(META_START, T_null, {N_V});
 	ptable.add(META_START, T_true, {N_V});
 	ptable.add(META_START, T_false, {N_V});
-	ptable.add(META_START, T_null, {N_V});
+	ptable.add(META_START, T_number, {N_V});
+	ptable.add(META_START, T_string, {N_V});
+	ptable.add(META_START, T_lbracket, {N_V});
+	ptable.add(META_START, T_lbrace, {N_V});
 
-	ptable.add(N_V, T_lbracket, {N_ARRAY});
-	ptable.add(N_V, T_lbrace, {N_OBJECT});
-	ptable.add(N_V, T_quote, {N_STRING});
-	ptable.add(N_V, T_number, {T_number});
+	ptable.add(N_V, T_null, {T_null});
 	ptable.add(N_V, T_true, {T_true});
 	ptable.add(N_V, T_false, {T_false});
-	ptable.add(N_V, T_null, {T_null});
+	ptable.add(N_V, T_number, {T_number});
+	ptable.add(N_V, T_string, {T_string});
+	ptable.add(N_V, T_lbracket, {N_ARRAY});
+	ptable.add(N_V, T_lbrace, {N_OBJECT});
 
 	ptable.add(N_OBJECT, T_lbrace, {T_lbrace, N_MEMBERS, T_rbrace});
 
+	ptable.add(N_MEMBERS, T_string, {N_MEMBER, N_MEMBERS});
 	ptable.add(N_MEMBERS, T_comma, {T_comma, N_MEMBER, N_MEMBERS});
 	ptable.add(N_MEMBERS, T_rbrace, {META_EPS});
-	ptable.add(N_MEMBERS, T_quote, {N_MEMBER, N_MEMBERS});
 
-	ptable.add(N_MEMBER, T_quote, {N_STRING, T_colon, N_V});
+	ptable.add(N_MEMBER, T_string, {T_string, T_colon, N_V});
 
 	ptable.add(N_ARRAY, T_lbracket, {T_lbracket, N_ELEMENTS, T_rbracket});
 
-	ptable.add(N_ELEMENTS, T_rbracket, {META_EPS});
-
 	ptable.add(N_ELEMENTS, T_lbracket, {N_V, N_MORE_ELEMENTS});
 	ptable.add(N_ELEMENTS, T_lbrace, {N_V, N_MORE_ELEMENTS});
-	ptable.add(N_ELEMENTS, T_quote, {N_V, N_MORE_ELEMENTS});
+	ptable.add(N_ELEMENTS, T_string, {N_V, N_MORE_ELEMENTS});
 	ptable.add(N_ELEMENTS, T_number, {N_V, N_MORE_ELEMENTS});
 	ptable.add(N_ELEMENTS, T_true, {N_V, N_MORE_ELEMENTS});
 	ptable.add(N_ELEMENTS, T_false, {N_V, N_MORE_ELEMENTS});
 	ptable.add(N_ELEMENTS, T_null, {N_V, N_MORE_ELEMENTS});
+	ptable.add(N_ELEMENTS, T_rbracket, {META_EPS});
 
 	ptable.add(N_MORE_ELEMENTS, T_rbracket, {META_EPS});
 	ptable.add(N_MORE_ELEMENTS, T_comma, {T_comma, N_V, N_MORE_ELEMENTS});
-
-	ptable.add(N_STRING, T_quote, {T_quote, N_CHARS, T_quote});
-
-	ptable.add(N_CHARS, T_quote, {META_EPS});
-	ptable.add(N_CHARS, T_unicode, {N_CHAR, N_CHARS});
-	ptable.add(N_CHARS, T_backslash, {N_CHAR, N_CHARS});
-
-	ptable.add(N_CHAR, T_unicode, {T_unicode});
-	ptable.add(N_CHAR, T_backslash, {T_backslash, T_escaped});
 }
