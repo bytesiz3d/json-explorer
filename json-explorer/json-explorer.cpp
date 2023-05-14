@@ -39,7 +39,7 @@ struct App
 	{
 		if (json_key && json.kind != J_JSON_ARRAY && json.kind != J_JSON_OBJECT)
 		{
-			ImGui::TextColored(ImColor{0xc3, 0xe7, 0xf5}, "%s", json_key);
+			ImGui::TextColored(ImColor{0xf7'40'40'ff}, "%s", json_key);
 			ImGui::SameLine(ImGui::GetContentRegionAvail().x / 4);
 		}
 
@@ -48,21 +48,38 @@ struct App
 		case J_JSON_NULL: return ImGui::Text("null");
 		case J_JSON_BOOL: return ImGui::Text(json.as_bool ? "true" : "false");
 		case J_JSON_NUMBER: return ImGui::Text("%lf", json.as_number);
-		case J_JSON_STRING: return ImGui::Text("%s", json.as_string);
+		case J_JSON_STRING: return ImGui::Text("\"%s\"", json.as_string);
 
 		case J_JSON_ARRAY:
+			if (json_key)
+				ImGui::PushStyleColor(ImGuiCol_Text, 0xf7'40'40'ff);
+
 			if (ImGui::TreeNode(json.as_array.ptr, "[%zu] %s", json.as_array.count, json_key ? json_key : ""))
 			{
+				if (json_key)
+					ImGui::PopStyleColor();
+
 				for (auto it = json.as_array.ptr; it != json.as_array.ptr + json.as_array.count; it++)
 					show_json(*it);
 
 				ImGui::TreePop();
 			}
+			else
+			{
+				if (json_key)
+					ImGui::PopStyleColor();
+			}
 			return;
 
 		case J_JSON_OBJECT:
+			if (json_key)
+				ImGui::PushStyleColor(ImGuiCol_Text, 0xf7'40'40'ff);
+
 			if (ImGui::TreeNode(json.as_object.pairs, "{%zu} %s", json.as_object.count, json_key ? json_key : ""))
 			{
+				if (json_key)
+					ImGui::PopStyleColor();
+
 				for (auto it = json.as_object.pairs; it != json.as_object.pairs + json.as_object.count; it++)
 				{
 					auto [key, value] = *it;
@@ -70,6 +87,11 @@ struct App
 				}
 
 				ImGui::TreePop();
+			}
+			else
+			{
+				if (json_key)
+					ImGui::PopStyleColor();
 			}
 			return;
 		}
