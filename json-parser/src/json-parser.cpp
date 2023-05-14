@@ -483,7 +483,7 @@ struct Lexer
 	}
 
 	Result<bool>
-	try_to_parse_singlechar_terminal(Rune rune)
+	try_to_scan_singlechar_terminal(Rune rune)
 	{
 		if (_state_stack.top() != STATE_0)
 			return false;
@@ -510,7 +510,7 @@ struct Lexer
 	}
 
 	Result<bool>
-	try_to_parse_multichar_terminal(Rune rune, std::span<const std::pair<STATE, Rune>> table, JSON_Token::KIND kind)
+	try_to_scan_multichar_terminal(Rune rune, std::span<const std::pair<STATE, Rune>> table, JSON_Token::KIND kind)
 	{
 		auto state = _state_stack.top();
 
@@ -549,7 +549,7 @@ struct Lexer
 	}
 
 	Result<bool>
-	try_to_parse_true(Rune rune)
+	try_to_scan_true(Rune rune)
 	{
 		std::pair<STATE, Rune> table[]{
 			{STATE_0, 't'},
@@ -558,11 +558,11 @@ struct Lexer
 			{STATE_TRU, 'e'},
 		};
 
-		return try_to_parse_multichar_terminal(rune, table, JSON_Token::T_true);
+		return try_to_scan_multichar_terminal(rune, table, JSON_Token::T_true);
 	}
 
 	Result<bool>
-	try_to_parse_false(Rune rune)
+	try_to_scan_false(Rune rune)
 	{
 		std::pair<STATE, Rune> table[]{
 			{STATE_0, 'f'},
@@ -572,11 +572,11 @@ struct Lexer
 			{STATE_FALS, 'e'},
 		};
 
-		return try_to_parse_multichar_terminal(rune, table, JSON_Token::T_false);
+		return try_to_scan_multichar_terminal(rune, table, JSON_Token::T_false);
 	}
 
 	Result<bool>
-	try_to_parse_null(Rune rune)
+	try_to_scan_null(Rune rune)
 	{
 		std::pair<STATE, Rune> table[]{
 			{STATE_0, 'n'},
@@ -585,7 +585,7 @@ struct Lexer
 			{STATE_NUL, 'l'},
 		};
 
-		return try_to_parse_multichar_terminal(rune, table, JSON_Token::T_null);
+		return try_to_scan_multichar_terminal(rune, table, JSON_Token::T_null);
 	}
 
 	bool
@@ -628,7 +628,7 @@ struct Lexer
 	}
 
 	Result<bool>
-	try_to_parse_number(Rune rune)
+	try_to_scan_number(Rune rune)
 	{
 		switch (auto state_top = _state_stack.top())
 		{
@@ -706,7 +706,7 @@ struct Lexer
 	}
 
 	Result<bool>
-	try_to_parse_character_in_string(Rune rune)
+	try_to_scan_character_in_string(Rune rune)
 	{
 		if (_state_stack.top() != STATE_STRING) return false;
 
@@ -727,7 +727,7 @@ struct Lexer
 	}
 
 	Result<bool>
-	try_to_parse_escaped_character(Rune rune)
+	try_to_scan_escaped_character(Rune rune)
 	{
 		if (_state_stack.top() != STATE_BACKSLASH) return false;
 		switch (rune)
@@ -755,7 +755,7 @@ struct Lexer
 	}
 
 	Result<bool>
-	try_to_parse_escaped_unicode(Rune rune)
+	try_to_scan_escaped_unicode(Rune rune)
 	{
 		if (_state_stack.top() != STATE_u
 			&& _state_stack.top() != STATE_uX
@@ -774,30 +774,30 @@ struct Lexer
 	}
 
 	Error
-	try_to_parse(Rune rune)
+	try_to_scan(Rune rune)
 	{
-		if (auto [ok, err] = try_to_parse_character_in_string(rune); ok) return Error{};
+		if (auto [ok, err] = try_to_scan_character_in_string(rune); ok) return Error{};
 		else if (err) return err;
 
-		if (auto [ok, err] = try_to_parse_escaped_character(rune); ok) return Error{};
+		if (auto [ok, err] = try_to_scan_escaped_character(rune); ok) return Error{};
 		else if (err) return err;
 
-		if (auto [ok, err] = try_to_parse_escaped_unicode(rune); ok) return Error{};
+		if (auto [ok, err] = try_to_scan_escaped_unicode(rune); ok) return Error{};
 		else if (err) return err;
 
-		if (auto [ok, err] = try_to_parse_null(rune); ok) return Error{};
+		if (auto [ok, err] = try_to_scan_null(rune); ok) return Error{};
 		else if (err) return err;
 
-		if (auto [ok, err] = try_to_parse_true(rune); ok) return Error{};
+		if (auto [ok, err] = try_to_scan_true(rune); ok) return Error{};
 		else if (err) return err;
 
-		if (auto [ok, err] = try_to_parse_false(rune); ok) return Error{};
+		if (auto [ok, err] = try_to_scan_false(rune); ok) return Error{};
 		else if (err) return err;
 
-		if (auto [ok, err] = try_to_parse_number(rune); ok) return Error{};
+		if (auto [ok, err] = try_to_scan_number(rune); ok) return Error{};
 		else if (err) return err;
 
-		if (auto [ok, err] = try_to_parse_singlechar_terminal(rune); ok) return Error{};
+		if (auto [ok, err] = try_to_scan_singlechar_terminal(rune); ok) return Error{};
 		else if (err) return err;
 
 		return Error{"Invalid character"};
@@ -811,11 +811,11 @@ struct Lexer
 			if (err)
 				return err;
 
-			if (auto parse_err = try_to_parse(rune))
+			if (auto parse_err = try_to_scan(rune))
 				return parse_err;
 		}
 
-		try_to_parse(Rune(JSON_Token::META_END_OF_INPUT));
+		try_to_scan(Rune(JSON_Token::META_END_OF_INPUT));
 		_tokens.emplace_back(JSON_Token::META_END_OF_INPUT);
 		return std::move(_tokens);
 	}
