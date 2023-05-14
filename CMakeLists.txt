@@ -1,31 +1,35 @@
 cmake_minimum_required(VERSION 3.20)
 
 set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_C_STANDARD 11)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
 
 project(json-explorer LANGUAGES C CXX)
 
-option(JSON_EXPLORER_BUILD_TESTS "Build tests")
+set(MASTER_PROJECT OFF)
+if (CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+	set(MASTER_PROJECT ON)
+endif ()
+
+option(JSON_EXPLORER_BUILD_TESTS "Build tests" ${MASTER_PROJECT})
 
 include(FetchContent)
-
-FetchContent_Declare(imgui
-	GIT_REPOSITORY git@github.com:ocornut/imgui.git
-	GIT_TAG docking)
-
-FetchContent_Declare(SDL2
-	GIT_REPOSITORY git@github.com:libsdl-org/SDL.git
-	GIT_TAG release-2.26.5)
-set(SDL_SHARED OFF)
 
 FetchContent_Declare(utf8proc
 	GIT_REPOSITORY git@github.com:JuliaStrings/utf8proc.git
 	GIT_TAG v2.8.0)
 
-FetchContent_MakeAvailable(imgui SDL2 utf8proc)
+FetchContent_Declare(imgui
+	GIT_REPOSITORY git@github.com:ocornut/imgui.git
+	GIT_TAG docking)
 
+FetchContent_Declare(sokol
+	GIT_REPOSITORY git@github.com:floooh/sokol.git
+	GIT_TAG master)
+
+FetchContent_MakeAvailable(utf8proc imgui sokol)
 add_library(imgui STATIC
 	${imgui_SOURCE_DIR}/imconfig.h
 	${imgui_SOURCE_DIR}/imgui.h
@@ -38,17 +42,17 @@ add_library(imgui STATIC
 	${imgui_SOURCE_DIR}/imgui_demo.cpp
 	${imgui_SOURCE_DIR}/imgui_draw.cpp
 	${imgui_SOURCE_DIR}/imgui_tables.cpp
-	${imgui_SOURCE_DIR}/imgui_widgets.cpp
-	#
-	${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.h
-	${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
-	${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer.h
-	${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer.cpp)
-target_link_libraries(imgui SDL2-static)
-target_include_directories(imgui
-	PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
+	${imgui_SOURCE_DIR}/imgui_widgets.cpp)
+target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR})
 
-add_subdirectory(imgui-window)
+add_library(sokol INTERFACE
+	${sokol_SOURCE_DIR}/sokol_app.h
+	${sokol_SOURCE_DIR}/sokol_gfx.h
+	${sokol_SOURCE_DIR}/sokol_glue.h
+	${sokol_SOURCE_DIR}/util/sokol_imgui.h
+	${sokol_SOURCE_DIR}/sokol_log.h)
+target_include_directories(sokol INTERFACE ${sokol_SOURCE_DIR})
+
 add_subdirectory(json-parser)
 add_subdirectory(json-explorer)
 
