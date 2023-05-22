@@ -845,6 +845,40 @@ j_parse(const char* json_string)
 	return {json};
 }
 
+void
+j_free(J_JSON json)
+{
+	switch (json.kind)
+	{
+	case J_JSON_NULL:
+	case J_JSON_BOOL:
+	case J_JSON_NUMBER:
+		return;
+
+	case J_JSON_STRING:
+		return ::free((void*)json.as_string);
+
+	case J_JSON_ARRAY:
+		for (auto it = json.as_array.ptr; it != json.as_array.ptr + json.as_array.count; it++)
+			j_free(*it);
+
+		return ::free((void*)json.as_array.ptr);
+
+	case J_JSON_OBJECT:
+
+		for (auto it = json.as_object.pairs; it != json.as_object.pairs + json.as_object.count; it++)
+		{
+			::free((void*)it->key);
+			j_free(it->value);
+		}
+
+		return ::free((void*)json.as_object.pairs);
+
+	default:
+		unreachable("invalid kind");
+	}
+}
+
 size_t
 _j_dump(J_JSON json, char* dump)
 {
@@ -933,9 +967,9 @@ _j_dump(J_JSON json, char* dump)
 		if (dump)
 			dump[size - 1] = '}';
 		return size;
-		
+
 	default:
-		unreachable("invalid type");
+		unreachable("invalid kind");
 		return 0;
 	}
 }
