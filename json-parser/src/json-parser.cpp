@@ -48,7 +48,7 @@ struct JSON_Token
 
 		N_OBJECT,
 		N_MEMBERS,
-		N_MEMBER,
+		N_MORE_MEMBERS,
 
 		N_ARRAY,
 		N_ELEMENTS,
@@ -99,7 +99,7 @@ struct JSON_Token
 
 		case N_OBJECT:  return "<OBJECT>";
 		case N_MEMBERS: return "<MEMBERS>";
-		case N_MEMBER:  return "<MEMBER>";
+		case N_MORE_MEMBERS:  return "<MORE_MEMBERS>";
 
 		case N_ARRAY:    return "<ARRAY>";
 		case N_ELEMENTS: return "<ELEMENTS>";
@@ -1040,14 +1040,16 @@ JSON_Token::fill_ptable(PTable& ptable)
 	ptable.add(N_V, T_lbracket, {N_ARRAY});
 	ptable.add(N_V, T_lbrace, {N_OBJECT});
 
+	// Object
 	ptable.add(N_OBJECT, T_lbrace, {T_lbrace, N_MEMBERS, T_rbrace});
 
-	ptable.add(N_MEMBERS, T_string, {N_MEMBER, N_MEMBERS});
-	ptable.add(N_MEMBERS, T_comma, {T_comma, N_MEMBER, N_MEMBERS});
+	ptable.add(N_MEMBERS, T_string, {T_string, T_colon, N_V, N_MORE_MEMBERS});
 	ptable.add(N_MEMBERS, T_rbrace, {META_EPS});
 
-	ptable.add(N_MEMBER, T_string, {T_string, T_colon, N_V});
+	ptable.add(N_MORE_MEMBERS, T_rbrace, {META_EPS});
+	ptable.add(N_MORE_MEMBERS, T_comma, {T_comma, T_string, T_colon, N_V, N_MORE_MEMBERS});
 
+	// Array
 	ptable.add(N_ARRAY, T_lbracket, {T_lbracket, N_ELEMENTS, T_rbracket});
 
 	ptable.add(N_ELEMENTS, T_lbracket, {N_V, N_MORE_ELEMENTS});
