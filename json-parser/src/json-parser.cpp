@@ -144,8 +144,7 @@ struct JSON_Token
 	bool
 	is_equal(const JSON_Token& other) const
 	{
-		return is_terminal() == other.is_terminal()
-			&& kind() == other.kind();
+		return is_terminal() == other.is_terminal() && kind() == other.kind();
 	}
 
 	static void
@@ -247,7 +246,7 @@ struct JSON_Builder
 	void
 	set_json(J_JSON json)
 	{
-		auto &ctx = _context.top();
+		auto& ctx = _context.top();
 		if (ctx.json.kind == J_JSON_ARRAY) // build array
 		{
 			ctx.array_builder.push_back(json);
@@ -272,7 +271,7 @@ struct JSON_Builder
 	}
 
 	void
-	token(const JSON_Token &tkn)
+	token(const JSON_Token& tkn)
 	{
 		switch (tkn.kind())
 		{
@@ -375,7 +374,7 @@ struct Parser
 				stack.pop();
 				for (auto rhs = production.rhs.rbegin(); rhs != production.rhs.rend(); rhs++)
 				{
-				 	if (rhs->kind() != JSON_Token::META_EPS)
+					if (rhs->kind() != JSON_Token::META_EPS)
 						stack.push(*rhs);
 				}
 			}
@@ -612,7 +611,7 @@ struct Lexer
 	}
 
 	bool
-	continue_parse_string(const char *str)
+	continue_parse_string(const char* str)
 	{
 		_string_builder += str;
 		return true;
@@ -632,8 +631,7 @@ struct Lexer
 	{
 		switch (auto state_top = _state_stack.top())
 		{
-		case STATE_0:
-		{
+		case STATE_0: {
 			if (rune == '-')
 			{
 				_state_stack.push(STATE_NUMBER_MINUS);
@@ -757,20 +755,23 @@ struct Lexer
 	Result<bool>
 	try_to_scan_escaped_unicode(Rune rune)
 	{
-		if (_state_stack.top() != STATE_u
-			&& _state_stack.top() != STATE_uX
-			&& _state_stack.top() != STATE_uXX
-			&& _state_stack.top() != STATE_uXXX
-		) return false;
+		switch (_state_stack.top())
+		{
+		case STATE_u:
+		case STATE_uX:
+		case STATE_uXX:
+		case STATE_uXXX:
+			if (is_hexdigit(rune) == false) return Error{"Invalid escaped unicode"};
 
-		if (is_hexdigit(rune) == false)
-			return Error{"Invalid escaped unicode"};
+			_state_stack.top() = STATE(_state_stack.top() + 1);
+			if (_state_stack.top() == STATE_uXXXX)
+				_state_stack.pop();
 
-		_state_stack.top() = STATE(_state_stack.top() + 1);
-		if (_state_stack.top() == STATE_uXXXX)
-			_state_stack.pop();
+			return continue_parse_string(rune);
 
-		return continue_parse_string(rune);
+		default:
+			return false;
+		}
 	}
 
 	Error
@@ -900,7 +901,7 @@ _j_dump(J_JSON json, char* dump)
 	case J_JSON_NUMBER:
 		size += ::snprintf(nullptr, 0, "%lf", json.as_number);
 		if (dump)
-			::snprintf(dump, size+1, "%lf", json.as_number);
+			::snprintf(dump, size + 1, "%lf", json.as_number);
 		return size;
 
 	case J_JSON_STRING:
