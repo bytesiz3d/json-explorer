@@ -127,8 +127,8 @@ init(void)
 	ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
 	// initial clear color
-	pass_action.colors[0].action = SG_ACTION_CLEAR;
-	pass_action.colors[0].value = {0.3f, 0.7f, 0.5f, 1.0f};
+	pass_action.colors[0].load_action = SG_LOADACTION_CLEAR;
+	pass_action.colors[0].clear_value = {0.3f, 0.7f, 0.5f, 1.0f};
 }
 
 void
