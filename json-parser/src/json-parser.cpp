@@ -993,9 +993,9 @@ _j_dump(J_JSON json, char* dump)
 		return size;
 
 	case J_JSON_NUMBER:
-		size += ::snprintf(nullptr, 0, "%lf", json.as_number);
+		size += ::snprintf(nullptr, 0, "%.16lg", json.as_number);
 		if (dump)
-			::snprintf(dump, size + 1, "%lf", json.as_number);
+			::snprintf(dump, size + 1, "%.16lg", json.as_number);
 		return size;
 
 	case J_JSON_STRING:
