@@ -1,11 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 
-add_library(json-parser SHARED
+add_library(json-parser
 	include/json-parser/json-parser.h
-	src/Base.h
 	src/json-parser.cpp)
 target_include_directories(json-parser PUBLIC include)
-target_link_libraries(json-parser PRIVATE utf8proc)
+target_link_libraries(json-parser PRIVATE utf8proc Tracy::TracyClient)
 
 include(GenerateExportHeader)
 generate_export_header(json-parser EXPORT_FILE_NAME ${CMAKE_CURRENT_SOURCE_DIR}/include/json-parser/Exports.h)

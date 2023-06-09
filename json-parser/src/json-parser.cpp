@@ -1,8 +1,6 @@
 #include "json-parser/json-parser.h"
-#include "Base.h"
 
 #include <array>
-#include <format>
 #include <initializer_list>
 #include <iostream>
 #include <span>
@@ -15,11 +13,90 @@
 
 #include <utf8proc.h>
 
+#include <tracy/Tracy.hpp>
+
 // OPTIMIZE:
 // * Profile standard library RAII containers and search for replacements
+#define unreachable(msg) assert(!msg)
 
 struct PTable;
 
+struct String_View
+{
+	const char* ptr;
+	size_t count;
+
+	constexpr String_View(const char* ptr)
+		: ptr(ptr), count(std::char_traits<char>::length(ptr))
+	{
+	}
+
+	String_View() = default;
+
+	String_View(const char* ptr, size_t count)
+		: ptr(ptr), count(count)
+	{
+	}
+
+	const char*
+	cstr_new()
+	{
+		char* str = (char*)::malloc(count + 1);
+		::memcpy((void*)str, ptr, count);
+		str[count] = '\0';
+		return str;
+	}
+};
+
+struct Error
+{
+	std::string_view err;
+
+	explicit operator bool() { return err.empty() == false; }
+
+	bool
+	operator==(bool v)
+	{
+		return bool(*this) == v;
+	}
+
+	bool
+	operator!=(bool v)
+	{
+		return bool(*this) != v;
+	}
+};
+
+template<typename T>
+struct Result
+{
+	T val;
+	Error err;
+
+	Result(Error e) : val{}, err(e)
+	{
+	}
+
+
+	template<typename... TArgs>
+	Result(TArgs&&... args) : val(std::forward<TArgs>(args)...), err{}
+	{
+	}
+
+	Result(const Result&) = delete;
+
+	Result(Result&&) = default;
+
+	Result&
+	operator=(const Result&) = delete;
+
+	Result&
+	operator=(Result&&) = default;
+
+	~Result() = default;
+};
+
+using Rune = utf8proc_int32_t;
 struct JSON_Token
 {
 	enum KIND : Rune
@@ -55,11 +132,13 @@ struct JSON_Token
 		N_MORE_ELEMENTS,
 	} _kind;
 
-	// OPTIMIZE: Maybe string_view
-	std::string _data;
+	String_View _data;
 
 	JSON_Token() = default;
-	JSON_Token(Rune kind, std::string_view data = {}) : _kind((KIND)kind), _data(data)
+	JSON_Token(Rune kind, String_View data = {}) : _kind((KIND)kind), _data(data)
+	{
+	}
+	JSON_Token(Rune kind, std::string_view data) : _kind((KIND)kind), _data{data.data(), data.size()}
 	{
 	}
 
@@ -69,7 +148,7 @@ struct JSON_Token
 		return _kind;
 	}
 
-	std::string_view
+	String_View
 	data() const
 	{
 		switch (_kind)
@@ -151,31 +230,10 @@ struct JSON_Token
 	fill_ptable(PTable& ptable);
 };
 
-template<>
-struct std::formatter<JSON_Token> : std::formatter<std::string>
-{
-	auto
-	format(const JSON_Token& tkn, format_context& ctx)
-	{
-		return std::format_to(ctx.out(), "{}", tkn.data());
-	}
-};
-
 struct Production
 {
 	JSON_Token lhs;
 	std::vector<JSON_Token> rhs;
-};
-
-template<>
-struct std::formatter<Production> : std::formatter<std::string>
-{
-	auto
-	format(const Production& production, format_context& ctx)
-	{
-		std::span<const JSON_Token> span(production.rhs.begin(), production.rhs.end());
-		return std::format_to(ctx.out(), "{} -> {}", production.lhs, span);
-	}
 };
 
 struct PTable
@@ -192,10 +250,9 @@ struct PTable
 	Result<Production>
 	operator()(JSON_Token::KIND nonterminal, JSON_Token::KIND terminal) const
 	{
-		assert(table.contains(nonterminal));
+		ZoneScoped;
 
 		auto& productions = table.at(nonterminal);
-
 		if (productions.contains(terminal) == false)
 			return Error{"Unexpected terminal"};
 
@@ -284,11 +341,14 @@ struct JSON_Builder
 		case JSON_Token::T_false:
 			return set_json({.kind = J_JSON_BOOL, .as_bool = false});
 
-		case JSON_Token::T_number:
-			return set_json({.kind = J_JSON_NUMBER, .as_number = ::atof(tkn.data().data())});
+		case JSON_Token::T_number: {
+			const char* tmp_str = tkn.data().cstr_new();
+			set_json({.kind = J_JSON_NUMBER, .as_number = ::atof(tmp_str)});
+			return ::free((void*)tmp_str);
+		}
 
 		case JSON_Token::T_string:
-			return set_json({.kind = J_JSON_STRING, .as_string = ::strdup(tkn.data().data())});
+			return set_json({.kind = J_JSON_STRING, .as_string = tkn.data().cstr_new()});
 
 		case JSON_Token::T_lbracket:
 			return _context.push(Context{.json{J_JSON_ARRAY}});
@@ -345,6 +405,8 @@ struct Parser
 	Result<J_JSON>
 	parse()
 	{
+		ZoneScoped;
+
 		std::stack<JSON_Token> stack{};
 		stack.emplace(JSON_Token::META_START);
 
@@ -430,16 +492,15 @@ struct Lexer
 
 	std::stack<STATE> _state_stack;
 	std::vector<JSON_Token> _tokens;
-	std::string _string_builder;
-	std::string _number_builder;
+	String_View _terminal_builder;
 
 	Lexer() = default;
-	Lexer(std::string_view string) : _string(string), _state_stack{}, _tokens{}, _number_builder{}
+	Lexer(std::string_view string) : _string(string), _state_stack{}, _tokens{}, _terminal_builder{}
 	{
 		_state_stack.push(STATE_0);
 	}
 
-	bool
+	inline bool
 	is_whitespace(Rune rune)
 	{
 		switch (rune)
@@ -451,19 +512,19 @@ struct Lexer
 		}
 	}
 
-	bool
+	inline bool
 	is_digit(Rune rune)
 	{
 		return Rune('0') <= rune && rune <= Rune('9');
 	}
 
-	bool
+	inline bool
 	is_hexdigit(Rune rune)
 	{
 		return is_digit(rune) || (Rune('a') <= rune && rune <= Rune('f')) || (Rune('A') <= rune && rune <= Rune('F'));
 	}
 
-	bool
+	inline bool
 	is_singlechar_terminal(Rune rune)
 	{
 		switch (rune)
@@ -481,9 +542,11 @@ struct Lexer
 		}
 	}
 
-	Result<bool>
-	try_to_scan_singlechar_terminal(Rune rune)
+	inline Result<bool>
+	try_to_scan_singlechar_terminal(String_View str, Rune rune)
 	{
+		ZoneScoped;
+
 		if (_state_stack.top() != STATE_0)
 			return false;
 
@@ -508,9 +571,11 @@ struct Lexer
 		return false;
 	}
 
-	Result<bool>
-	try_to_scan_multichar_terminal(Rune rune, std::span<const std::pair<STATE, Rune>> table, JSON_Token::KIND kind)
+	inline Result<bool>
+	try_to_scan_multichar_terminal(String_View str, Rune rune, std::span<const std::pair<STATE, Rune>> table, JSON_Token::KIND kind)
 	{
+		ZoneScoped;
+
 		auto state = _state_stack.top();
 
 		if (auto [first_state, expected] = table.front(); state == first_state)
@@ -547,8 +612,8 @@ struct Lexer
 		return false;
 	}
 
-	Result<bool>
-	try_to_scan_true(Rune rune)
+	inline Result<bool>
+	try_to_scan_true(String_View str, Rune rune)
 	{
 		std::pair<STATE, Rune> table[]{
 			{STATE_0, 't'},
@@ -557,11 +622,11 @@ struct Lexer
 			{STATE_TRU, 'e'},
 		};
 
-		return try_to_scan_multichar_terminal(rune, table, JSON_Token::T_true);
+		return try_to_scan_multichar_terminal(str, rune, table, JSON_Token::T_true);
 	}
 
-	Result<bool>
-	try_to_scan_false(Rune rune)
+	inline Result<bool>
+	try_to_scan_false(String_View str, Rune rune)
 	{
 		std::pair<STATE, Rune> table[]{
 			{STATE_0, 'f'},
@@ -571,11 +636,11 @@ struct Lexer
 			{STATE_FALS, 'e'},
 		};
 
-		return try_to_scan_multichar_terminal(rune, table, JSON_Token::T_false);
+		return try_to_scan_multichar_terminal(str, rune, table, JSON_Token::T_false);
 	}
 
-	Result<bool>
-	try_to_scan_null(Rune rune)
+	inline Result<bool>
+	try_to_scan_null(String_View str, Rune rune)
 	{
 		std::pair<STATE, Rune> table[]{
 			{STATE_0, 'n'},
@@ -584,70 +649,74 @@ struct Lexer
 			{STATE_NUL, 'l'},
 		};
 
-		return try_to_scan_multichar_terminal(rune, table, JSON_Token::T_null);
+		return try_to_scan_multichar_terminal(str, rune, table, JSON_Token::T_null);
 	}
 
-	bool
-	continue_parse_number(Rune rune)
+	inline bool
+	continue_scan_number(String_View str)
 	{
-		_number_builder += char(rune);
+		ZoneScoped;
+		if (_terminal_builder.ptr == nullptr)
+			_terminal_builder.ptr = str.ptr;
+
+		_terminal_builder.count++;
 		return true;
 	}
 
-	bool
-	end_parse_number()
+	inline bool
+	end_scan_number()
 	{
+		ZoneScoped;
 		_state_stack.pop();
-		_tokens.emplace_back(JSON_Token::T_number, std::move(_number_builder));
-		_number_builder.clear();
+		_tokens.emplace_back(JSON_Token::T_number, _terminal_builder);
+		_terminal_builder = {};
 		return false;
 	}
 
-	bool
-	continue_parse_string(Rune rune)
+	inline bool
+	continue_scan_string(String_View view)
 	{
-		_string_builder += char(rune);
+		ZoneScoped;
+		if (_terminal_builder.ptr == nullptr)
+			_terminal_builder.ptr = view.ptr;
+
+		_terminal_builder.count += view.count;
 		return true;
 	}
 
-	bool
-	continue_parse_string(const char* str)
+	inline bool
+	end_scan_string()
 	{
-		_string_builder += str;
-		return true;
-	}
-
-	bool
-	end_parse_string()
-	{
+		ZoneScoped;
 		_state_stack.pop();
-		_tokens.emplace_back(JSON_Token::T_string, std::move(_string_builder));
-		_string_builder.clear();
+		_tokens.emplace_back(JSON_Token::T_string, _terminal_builder);
+		_terminal_builder = {};
 		return true;
 	}
 
-	Result<bool>
-	try_to_scan_number(Rune rune)
+	inline Result<bool>
+	try_to_scan_number(String_View str, Rune rune)
 	{
+		ZoneScoped;
 		switch (auto state_top = _state_stack.top())
 		{
 		case STATE_0: {
 			if (rune == '-')
 			{
 				_state_stack.push(STATE_NUMBER_MINUS);
-				return continue_parse_number(rune);
+				return continue_scan_number(str);
 			}
 
 			if (is_digit(rune) == false) return false;
 
 			_state_stack.push(rune == '0' ? STATE_NUMBER_INTEGER_LEADING_ZERO : STATE_NUMBER_INTEGER);
-			return continue_parse_number(rune);
+			return continue_scan_number(str);
 		}
 		case STATE_NUMBER_MINUS: {
 			if (is_digit(rune) == false) return Error{"Invalid character in number"};
 
 			_state_stack.top() = rune == '0' ? STATE_NUMBER_INTEGER_LEADING_ZERO : STATE_NUMBER_INTEGER;
-			return continue_parse_number(rune);
+			return continue_scan_number(str);
 		}
 		case STATE_NUMBER_INTEGER_LEADING_ZERO:
 		case STATE_NUMBER_INTEGER: {
@@ -657,76 +726,76 @@ struct Lexer
 			if (rune == '.')
 			{
 				_state_stack.top() = STATE_NUMBER_FRACTION;
-				return continue_parse_number(rune);
+				return continue_scan_number(str);
 			}
 			if (rune == 'e' || rune == 'E')
 			{
 				_state_stack.top() = STATE_NUMBER_EXPONENT;
-				return continue_parse_number(rune);
+				return continue_scan_number(str);
 			}
 
-			return is_digit(rune) ? continue_parse_number(rune) : end_parse_number();
+			return is_digit(rune) ? continue_scan_number(str) : end_scan_number();
 		}
 		case STATE_NUMBER_FRACTION: {
 			if (is_digit(rune) == false) return Error{"Invalid fraction"};
 
 			_state_stack.top() = STATE_NUMBER_FRACTION_DIGITS;
-			return continue_parse_number(rune);
+			return continue_scan_number(str);
 		}
 		case STATE_NUMBER_FRACTION_DIGITS: {
 			if (rune == 'e' || rune == 'E')
 			{
 				_state_stack.top() = STATE_NUMBER_EXPONENT;
-				return continue_parse_number(rune);
+				return continue_scan_number(str);
 			}
 
-			return is_digit(rune) ? continue_parse_number(rune) : end_parse_number();
+			return is_digit(rune) ? continue_scan_number(str) : end_scan_number();
 		}
 		case STATE_NUMBER_EXPONENT:
 		case STATE_NUMBER_EXPONENT_SIGN: {
 			if (state_top == STATE_NUMBER_EXPONENT && (rune == '-' || rune == '+'))
 			{
 				_state_stack.top() = STATE_NUMBER_EXPONENT_SIGN;
-				return continue_parse_number(rune);
+				return continue_scan_number(str);
 			}
 
 			if (is_digit(rune) == false) return Error{"Invalid exponent"};
 
 			_state_stack.top() = STATE_NUMBER_EXPONENT_DIGITS;
-			return continue_parse_number(rune);
+			return continue_scan_number(str);
 		}
 		case STATE_NUMBER_EXPONENT_DIGITS: {
-			return is_digit(rune) ? continue_parse_number(rune) : end_parse_number();
+			return is_digit(rune) ? continue_scan_number(str) : end_scan_number();
 		}
 		default:
 			return false;
 		}
 	}
 
-	Result<bool>
-	try_to_scan_character_in_string(Rune rune)
+	inline Result<bool>
+	try_to_scan_character_in_string(String_View str, Rune rune)
 	{
+		ZoneScoped;
 		if (_state_stack.top() != STATE_STRING) return false;
 
 		if (rune == '"')
-			return end_parse_string();
+			return end_scan_string();
 
 		if (Rune(0x20) <= rune && rune <= Rune(0x10ffff))
 		{
 			if (rune == '\\')
 				_state_stack.push(STATE_BACKSLASH);
 
-			char utf8[5]{};
-			utf8proc_encode_char(rune, (utf8proc_uint8_t*)utf8);
-			return continue_parse_string(utf8);
+			return continue_scan_string(str);
 		}
 
 		return Error{"Invalid unicode character"};
 	}
 
-	Result<bool>
-	try_to_scan_escaped_character(Rune rune)
+	inline Result<bool>
+	try_to_scan_escaped_character(String_View str, Rune rune)
 	{
+		ZoneScoped;
 		if (_state_stack.top() != STATE_BACKSLASH) return false;
 		switch (rune)
 		{
@@ -739,12 +808,12 @@ struct Lexer
 		case 'r':
 		case 't': {
 			_state_stack.pop();
-			return continue_parse_string(rune);
+			return continue_scan_string(str);
 		}
 
 		case 'u': {
 			_state_stack.top() = STATE_u;
-			return continue_parse_string(rune);
+			return continue_scan_string(str);
 		}
 
 		default:
@@ -752,9 +821,10 @@ struct Lexer
 		}
 	}
 
-	Result<bool>
-	try_to_scan_escaped_unicode(Rune rune)
+	inline Result<bool>
+	try_to_scan_escaped_unicode(String_View str, Rune rune)
 	{
+		ZoneScoped;
 		switch (_state_stack.top())
 		{
 		case STATE_u:
@@ -767,57 +837,79 @@ struct Lexer
 			if (_state_stack.top() == STATE_uXXXX)
 				_state_stack.pop();
 
-			return continue_parse_string(rune);
+			return continue_scan_string(str);
 
 		default:
 			return false;
 		}
 	}
 
-	Error
-	try_to_scan(Rune rune)
+	inline Error
+	try_to_scan(String_View str, Rune rune)
 	{
-		if (auto [ok, err] = try_to_scan_character_in_string(rune); ok) return Error{};
+		ZoneScoped;
+
+		if (auto [ok, err] = try_to_scan_character_in_string(str, rune); ok) return Error{};
 		else if (err) return err;
 
-		if (auto [ok, err] = try_to_scan_escaped_character(rune); ok) return Error{};
+		if (auto [ok, err] = try_to_scan_escaped_character(str, rune); ok) return Error{};
 		else if (err) return err;
 
-		if (auto [ok, err] = try_to_scan_escaped_unicode(rune); ok) return Error{};
+		if (auto [ok, err] = try_to_scan_escaped_unicode(str, rune); ok) return Error{};
 		else if (err) return err;
 
-		if (auto [ok, err] = try_to_scan_null(rune); ok) return Error{};
+		if (auto [ok, err] = try_to_scan_null(str, rune); ok) return Error{};
 		else if (err) return err;
 
-		if (auto [ok, err] = try_to_scan_true(rune); ok) return Error{};
+		if (auto [ok, err] = try_to_scan_true(str, rune); ok) return Error{};
 		else if (err) return err;
 
-		if (auto [ok, err] = try_to_scan_false(rune); ok) return Error{};
+		if (auto [ok, err] = try_to_scan_false(str, rune); ok) return Error{};
 		else if (err) return err;
 
-		if (auto [ok, err] = try_to_scan_number(rune); ok) return Error{};
+		if (auto [ok, err] = try_to_scan_number(str, rune); ok) return Error{};
 		else if (err) return err;
 
-		if (auto [ok, err] = try_to_scan_singlechar_terminal(rune); ok) return Error{};
+		if (auto [ok, err] = try_to_scan_singlechar_terminal(str, rune); ok) return Error{};
 		else if (err) return err;
 
 		return Error{"Invalid character"};
 	}
 
+	inline Error
+	end_input()
+	{
+		try_to_scan({}, JSON_Token::META_END_OF_INPUT);
+		_tokens.emplace_back(JSON_Token::META_END_OF_INPUT);
+		return Error{};
+	}
+
 	Result<std::vector<JSON_Token>>
 	lex()
 	{
-		for (auto [rune, err] : Utf8_Iterator{_string})
-		{
-			if (err)
-				return err;
+		ZoneScoped;
 
-			if (auto parse_err = try_to_scan(rune))
+		const utf8proc_uint8_t* BASE = (const utf8proc_uint8_t*)_string.data();
+		const utf8proc_ssize_t SIZE = _string.size();
+
+		const utf8proc_uint8_t* it = BASE;
+		while (it < BASE + SIZE)
+		{
+			FrameMark;
+
+			Rune rune{};
+			
+			auto rune_size = utf8proc_iterate(it, SIZE - (it - BASE), &rune); 
+			if (rune_size < 0)
+				return Error{utf8proc_errmsg(rune_size)};
+
+			if (auto parse_err = try_to_scan({(char*)it, (size_t)rune_size}, rune))
 				return parse_err;
+
+			it += rune_size;
 		}
 
-		try_to_scan(Rune(JSON_Token::META_END_OF_INPUT));
-		_tokens.emplace_back(JSON_Token::META_END_OF_INPUT);
+		end_input();
 		return std::move(_tokens);
 	}
 };
@@ -833,6 +925,8 @@ j_version()
 J_Parse_Result
 j_parse(const char* json_string)
 {
+	ZoneScoped;
+
 	auto table = JSON_PTable();
 
 	auto [tokens, lex_err] = Lexer(json_string).lex();
