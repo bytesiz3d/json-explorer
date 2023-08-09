@@ -13,6 +13,7 @@
 #include <json-parser/json-parser.h>
 
 #include <fstream>
+#include <format>
 
 #include "Roboto-Medium-ttf.h"
 
@@ -21,85 +22,76 @@ struct App
 	J_Parse_Result _parse;
 	std::string _json_buf;
 
-	App(): _parse{}
+	App() : _parse{}, _json_buf{}
 	{
-		update_json_buf(R"(
-		{
-			"album_type": "compilation",
-			"total_tracks": 9.000000,
-			"available_markets": ["CA", "BR", "IT"],
-			"external_urls": {
-				"spotify": "string"
-			},
-			"href": "string",
-			"id": "2up3OPMp9Tb4dAKM2erWXQ",
-			"images": [{
-				"url": "https://i.scdn.co/image/ab67616d00001e02ff9ca10b55ce82ae553c8228",
-				"height": 300.000000,
-				"width": 300.000000
-			}]
-		})");
+		update_json_buf("{}");
 	}
 
 	void
-	show_json(J_JSON json, const char* json_key = nullptr)
+	show_json(J_JSON json, const char* json_key = "")
 	{
 		switch (json.kind)
 		{
-		case J_JSON_NULL: return ImGui::Text("null");
-		case J_JSON_BOOL: return ImGui::Text(json.as_bool ? "true" : "false");
-		case J_JSON_NUMBER: return ImGui::Text("%.16lg", json.as_number);
-		case J_JSON_STRING: return ImGui::Text("\"%s\"", json.as_string);
+		case J_JSON_NULL: {
+			return ImGui::Text("null");
+		}
 
-		case J_JSON_ARRAY:
-			if (ImGui::TreeNodeEx(json.as_array.ptr, ImGuiTreeNodeFlags_DefaultOpen, "%s [%zu]", json_key ? json_key : "", json.as_array.count))
+		case J_JSON_BOOL: {
+			return ImGui::Text("%s", json.as_bool ? "true" : "false");
+		}
+
+		case J_JSON_NUMBER: {
+			auto formatted_text = std::format("{}", json.as_number);
+			return ImGui::Text("%s", formatted_text.c_str());
+		}
+
+		case J_JSON_STRING: {
+			return ImGui::Text("\"%s\"", json.as_string);
+		}
+
+		case J_JSON_ARRAY: {
+			if (ImGui::TreeNodeEx(json.as_array.ptr, ImGuiTreeNodeFlags_DefaultOpen, "%s [%zu]", json_key, json.as_array.count))
 			{
-				for (auto it = json.as_array.ptr; it != json.as_array.ptr + json.as_array.count; it++)
+				for (int i = 0; i < json.as_array.count; i++)
 				{
-					if (it->kind != J_JSON_ARRAY && it->kind != J_JSON_OBJECT)
+					auto value = json.as_array.ptr[i];
+
+					if (value.kind != J_JSON_ARRAY && value.kind != J_JSON_OBJECT)
 						ImGui::Bullet();
 
-					show_json(*it);
+					show_json(value);
 				}
 
 				ImGui::TreePop();
 			}
 			return;
+		}
 
-		case J_JSON_OBJECT:
-			if (ImGui::TreeNodeEx(json.as_object.pairs, ImGuiTreeNodeFlags_DefaultOpen, "%s {%zu}", json_key ? json_key : "", json.as_object.count))
+		case J_JSON_OBJECT: {
+			if (ImGui::TreeNodeEx(json.as_object.pairs, ImGuiTreeNodeFlags_DefaultOpen, "%s {%zu}", json_key, json.as_object.count))
 			{
-				const auto begin_object_table = [] { return ImGui::BeginTable("##object", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable); };
-				if (begin_object_table())
+				for (int i = 0; i < json.as_object.count; i++)
 				{
-					ImGui::TableSetupColumn("##keys", ImGuiTableColumnFlags_WidthFixed);
-					ImGui::TableSetupColumn("##values", ImGuiTableColumnFlags_WidthStretch);
-					for (auto it = json.as_object.pairs; it != json.as_object.pairs + json.as_object.count; it++)
+					auto [key, value] = json.as_object.pairs[i];
+					if (value.kind != J_JSON_ARRAY && value.kind != J_JSON_OBJECT)
 					{
-						auto [key, value] = *it;
+						ImGui::BulletText("%s", key);
 
-						if (value.kind != J_JSON_ARRAY && value.kind != J_JSON_OBJECT)
-						{
-							ImGui::TableNextColumn();
-							ImGui::Text("%s", key);
+						ImGui::SameLine();
+						ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
 
-							ImGui::TableNextColumn();
-							show_json(value);
-						}
-						else
-						{
-							ImGui::EndTable();
-							show_json(value, key);
-							begin_object_table();
-						}
+						ImGui::SameLine();
+						show_json(value);
 					}
-
-					ImGui::EndTable();
+					else
+					{
+						show_json(value, key);
+					}
 				}
-
 				ImGui::TreePop();
 			}
 			return;
+		}
 		}
 	}
 
@@ -124,16 +116,18 @@ struct App
 			if (ImGui::BeginTable("##table", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable))
 			{
 				ImGui::TableNextColumn();
-				if (ImGui::InputTextMultiline("##JSON", &_json_buf, {-10.f, -10.f}, ImGuiInputTextFlags_AllowTabInput))
+				if (ImGui::InputTextMultiline("##JSON", &_json_buf, {-10.f, -30.f}, ImGuiInputTextFlags_AllowTabInput))
 					update_json_buf();
+
+				ImGui::TextColored(ImColor{144, 144, 144}, "Type into the textbox or drag'n'drop a JSON file");
 
 				ImGui::TableNextColumn();
 				if (ImGui::BeginChild("##JSON View", ImGui::GetContentRegionAvail(), false, ImGuiWindowFlags_HorizontalScrollbar))
 				{
-					if (this->_parse.err)
-						ImGui::TextColored(ImColor{0xff'00'00'ff}, "Invalid JSON");
+					if (_parse.err)
+						ImGui::TextColored(ImColor{255, 0, 0}, "Invalid JSON");
 					else
-						show_json(this->_parse.json);
+						show_json(_parse.json);
 				}
 				ImGui::EndChild();
 
