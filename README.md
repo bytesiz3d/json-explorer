@@ -1,17 +1,12 @@
-# imgui-starter
-Some starter code to get a window with [ImGui](https://github.com/ocornut/imgui) running.
+# json-explorer
+LL JSON parser and explorer app
 
-## Usage
-```cmake
-target_link_libraries(${TARGET} imgui-window)
-```
-```c++
-if (im_window::window_init() != 0)
-	// panic
+## Features
+- Profiling using [Tracy](https://github.com/wolfpld/tracy).
+- C interface for the [json-parser](json-parser\include\json-parser\json-parser.h) library.
+- [Unit tests](json-parser-tests\json-parser-tests.cpp) for the library.
+- [json-explorer](json-explorer\json-explorer.cpp) app is completely cross-platform (_based on [sokol](https://github.com/floooh/sokol)_).
 
-im_window::window_run([/* any representation of state */] {
-	ImGui::Text("Hello, world");
-});
+## Screenshots
 
-im_window::window_dispose();
-```
+![image](https://github.com/bytesiz3d/json-explorer/assets/44498156/4d0152ce-7f9e-4c67-af6b-bff0c1a4971b)
