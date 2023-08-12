@@ -154,29 +154,42 @@ init(void)
 	// multi-sampled rendering or using non-default pixel formats)
 	simgui_desc_t simgui_desc = {.no_default_font = true};
 	simgui_setup(&simgui_desc);
-	ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+	
+	auto& io = ImGui::GetIO();
+	io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+	
+	// https://github.com/floooh/sokol-samples/blob/master/sapp/imgui-highdpi-sapp.cc
+	// font-config
 	{
-		auto io = &ImGui::GetIO();
-		ImFontConfig config{};
+		ImFontConfig config = {};
 		config.FontDataOwnedByAtlas = false;
-		io->Fonts->AddFontFromMemoryTTF(Roboto_Medium_ttf, Roboto_Medium_ttf_len, 18, &config);
+		io.Fonts->AddFontFromMemoryTTF(Roboto_Medium_ttf, Roboto_Medium_ttf_len, 18, &config);
+
 		unsigned char* font_pixels;
 		int font_width, font_height;
-		io->Fonts->GetTexDataAsRGBA32(&font_pixels, &font_width, &font_height);
-		sg_image_desc img_desc;
-		_simgui_clear(&img_desc, sizeof(img_desc));
-		img_desc.width = font_width;
-		img_desc.height = font_height;
-		img_desc.pixel_format = SG_PIXELFORMAT_RGBA8;
-		img_desc.wrap_u = SG_WRAP_CLAMP_TO_EDGE;
-		img_desc.wrap_v = SG_WRAP_CLAMP_TO_EDGE;
-		img_desc.min_filter = SG_FILTER_LINEAR;
-		img_desc.mag_filter = SG_FILTER_LINEAR;
+		io.Fonts->GetTexDataAsRGBA32(&font_pixels, &font_width, &font_height);
+		
+		sg_image_desc img_desc = {
+			.width = font_width,
+			.height = font_height,
+			.pixel_format = SG_PIXELFORMAT_RGBA8,
+			.label = "sokol-imgui-font"
+		};
 		img_desc.data.subimage[0][0].ptr = font_pixels;
-		img_desc.data.subimage[0][0].size = (size_t)(font_width * font_height) * sizeof(uint32_t);
-		img_desc.label = "sokol-imgui-font";
-		_simgui.img = sg_make_image(&img_desc);
-		io->Fonts->TexID = (ImTextureID)(uintptr_t)_simgui.img.id;
+		img_desc.data.subimage[0][0].size = font_width * font_height * 4;
+
+		sg_sampler_desc smp_desc = {
+			.min_filter = SG_FILTER_LINEAR,
+			.mag_filter = SG_FILTER_LINEAR,
+			.wrap_u = SG_WRAP_CLAMP_TO_EDGE,
+			.wrap_v = SG_WRAP_CLAMP_TO_EDGE,
+		};
+
+		simgui_image_desc_t font_desc = {
+			.image = sg_make_image(&img_desc),
+			.sampler = sg_make_sampler(&smp_desc),
+		};
+		io.Fonts->TexID = simgui_imtextureid(simgui_make_image(&font_desc));
 	}
 
 	// initial clear color
@@ -238,18 +251,17 @@ sokol_main(int argc, char* argv[])
 {
 	(void)argc;
 	(void)argv;
-	sapp_desc desc = {};
-	desc.init_cb = init;
-	desc.frame_cb = frame;
-	desc.cleanup_cb = cleanup;
-	desc.event_cb = event;
-	desc.width = 1024;
-	desc.height = 768;
-	desc.window_title = "JSON Explorer";
-	desc.ios_keyboard_resizes_canvas = false;
-	desc.icon.sokol_default = true;
-	desc.enable_dragndrop = true;
-	desc.enable_clipboard = true;
-	desc.logger.func = slog_func;
-	return desc;
+	return sapp_desc {
+		.init_cb = init,
+		.frame_cb = frame,
+		.cleanup_cb = cleanup,
+		.event_cb = event,
+		.width = 1024,
+		.height = 768,
+		.window_title = "JSON Explorer",
+		.enable_clipboard = true,
+		.enable_dragndrop = true,
+		.icon = { .sokol_default = true },
+		.logger = { .func = slog_func },
+	};
 }

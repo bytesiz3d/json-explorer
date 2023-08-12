@@ -31,8 +31,8 @@ FetchContent_Declare(imgui
 
 FetchContent_Declare(sokol
 	GIT_REPOSITORY git@github.com:floooh/sokol.git
-	GIT_SHALLOW TRUE
-	GIT_TAG master)
+	GIT_SHALLOW FALSE
+	GIT_TAG 47d92ff86298fc96b3b84d93d0ee8c8533d3a2d2)
 
 FetchContent_Declare(tracy
 	GIT_REPOSITORY git@github.com:wolfpld/tracy.git

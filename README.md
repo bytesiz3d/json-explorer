@@ -1,5 +1,5 @@
 # json-explorer
-LL JSON parser and explorer app
+Top-down LL(1) JSON parser and explorer application.
 
 ## Features
 - Profiling using [Tracy](https://github.com/wolfpld/tracy).
